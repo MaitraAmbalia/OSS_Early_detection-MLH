@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     )
 
     app_env: Literal["development", "test", "production"] = "development"
-    data_mode: Literal["mock", "snowflake"] = "mock"
+    data_mode: Literal["github", "snowflake"] = "github"
     cors_origins: Annotated[list[str], NoDecode] = ["http://localhost:5173"]
 
     snowflake_account: str | None = None
@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     snowflake_schema: str = "DETECTION"
 
     github_api_url: str = "https://api.github.com"
-    github_api_version: str = "2022-11-28"
+    github_api_version: str = "2026-03-10"
     github_token: str | None = None
     request_timeout_seconds: float = 15.0
 

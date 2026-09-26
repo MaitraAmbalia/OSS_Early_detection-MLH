@@ -1,56 +1,47 @@
 # Sentinel OSS
 
-Sentinel OSS is an early-warning dashboard for open-source supply-chain risk. It combines GitHub activity, dependency metadata, GitHub Security Advisories, and OSV data to surface suspicious repository behavior and vulnerable packages.
+Sentinel OSS is a GitHub-first dependency security monitor. A user connects a fine-grained, read-only GitHub token, selects a repository they can access, and receives its current dependency inventory and open Dependabot vulnerability alerts.
 
-The project runs locally in credential-free mock mode. Snowflake and GitHub credentials are optional and are needed only for live data.
+The active application does not generate mock findings and does not use GH Archive or OSV. Repository access, dependency data, and vulnerability results come directly from GitHub.
 
-## What it detects
+The current version performs on-demand snapshots when a user selects or rescans a repository. It does not claim to provide continuous background monitoring; that requires a hosted GitHub App, webhooks, scheduled rescans, and persistent storage.
 
-- A new collaborator pushing code within 24 hours.
-- One actor pushing across many repositories in a short window.
-- Suspicious commit-message patterns linked to install hooks, obfuscation, credential access, or download-and-execute behavior.
-- Repository dependencies whose resolved versions match GitHub Advisory or OSV affected ranges.
-- A combined 0–100 risk score using a complement-product heuristic.
+## Genuine data flow
 
-This is a triage tool, not an automatic vulnerability verdict. Findings should always be reviewed by a human.
+1. The backend validates the credential with GitHub.
+2. GitHub returns repositories that the authenticated user can access.
+3. The selected repository's Dependency Graph is exported as an SPDX SBOM.
+4. Open Dependabot alerts provide affected packages, severity, vulnerable ranges, and GHSA identifiers.
+5. Sentinel assigns a transparent display score based on the highest open alert severity. It does not claim that this score is a statistical probability.
 
-## Tech stack
+If Dependency Graph, Dependabot alerts, or the required permission is unavailable, the dashboard shows that limitation. It never substitutes representative vulnerabilities.
 
-- **Frontend:** React 19, TypeScript, Vinext/Vite, Tailwind CSS, shadcn/ui, and Recharts.
+## Technology
+
+- **Frontend:** React 19, TypeScript, Vinext/Vite, Tailwind CSS, and shadcn/ui.
 - **Backend:** Python 3.11+, FastAPI, Pydantic, HTTPX, and Uvicorn.
-- **Data and security:** Snowflake, GH Archive, GitHub APIs/SBOM, GitHub Advisory Database, and OSV.
-- **Automation:** GitHub Actions for CI and scheduled ingestion.
-
-## Snowflake technology used
-
-In short, the implemented Snowflake path uses:
-
-- tables for events, advisories, dependencies, checkpoints, and risk scores;
-- `VARIANT` and `LATERAL FLATTEN` for semi-structured GitHub payloads;
-- idempotent `MERGE` statements for checkpointed ingestion;
-- SQL views and window functions for behavioral detection;
-- stored procedures for score refresh, repository lookup, and dashboard summaries;
-- separate warehouses, service users, and least-privilege roles for ingestion and read-only dashboard access;
-- key-pair authentication from the FastAPI service.
-
-The architecture also documents future extensions such as Cybersyn Marketplace history, Cortex explanations, CTAS feature tables, a SQL UDF, and Streamlit in Snowflake. These are not presented as implemented features.
+- **GitHub:** authenticated repository listing, Dependency Graph/SBOM, and Dependabot alerts.
+- **Optional storage:** Snowflake tables, roles, warehouses, `VARIANT`, `MERGE`, views, and stored procedures remain available for a hosted deployment that needs historical snapshots.
 
 ## Run locally
 
-### Prerequisites
+### Requirements
 
 - Node.js 22.13 or newer
 - npm
 - Python 3.11 or newer
+- A fine-grained GitHub personal access token
 
-### 1. Clone the repository
+### 1. Clone and install the frontend
 
 ```powershell
 git clone https://github.com/MaitraAmbalia/OSS_Early_detection-MLH.git
 cd OSS_Early_detection-MLH
+npm ci
+Copy-Item .env.example .env.local
 ```
 
-### 2. Start the backend
+### 2. Install and start the backend
 
 In the first PowerShell terminal:
 
@@ -63,114 +54,71 @@ Copy-Item .env.example .env
 python -m uvicorn app.main:app --reload --port 8000
 ```
 
-Mock mode is enabled by default, so no external credentials are required. The API is available at `http://127.0.0.1:8000`, with interactive documentation at `http://127.0.0.1:8000/docs`.
-
 ### 3. Start the frontend
 
 In a second PowerShell terminal, from the repository root:
 
 ```powershell
-npm ci
-Copy-Item .env.example .env.local
 npm run dev
 ```
 
-Open `http://localhost:5173`.
+Open `http://localhost:5173` and complete the GitHub onboarding screen.
 
-On macOS or Linux, use `python3 -m venv .venv`, `source .venv/bin/activate`, and `cp` instead of the PowerShell-specific commands.
+On macOS or Linux, use `python3 -m venv .venv`, `source .venv/bin/activate`, and `cp` in place of the PowerShell-specific commands.
+
+## GitHub credential setup
+
+Create a fine-grained token at `https://github.com/settings/personal-access-tokens/new` and grant access only to repositories you want Sentinel to monitor.
+
+Required repository permissions:
+
+- **Metadata:** read
+- **Contents:** read
+- **Dependabot alerts:** read
+
+The onboarding credential is kept only in the current browser tab's memory. The frontend sends it to the local FastAPI service in the `X-GitHub-Token` request header. The backend does not persist or log request headers or bodies.
+
+For unattended local use, `GITHUB_TOKEN` can instead be set in the ignored `backend/.env` file. Never place a real token in `.env.example` or commit it.
 
 ## Environment variables
 
-Never commit `.env`, `.env.local`, private keys, passwords, or tokens. The repository tracks only safe `.env.example` templates, and `.gitignore` excludes real environment files and `*.pem` keys.
-
 ### Frontend (`.env.local`)
 
-| Variable | Required | Purpose |
+| Variable | Default | Purpose |
 | --- | --- | --- |
-| `NEXT_PUBLIC_API_BASE_URL` | No | Backend URL; defaults to `http://127.0.0.1:8000`. |
+| `NEXT_PUBLIC_API_BASE_URL` | `http://127.0.0.1:8000` | Local FastAPI URL. |
 
 ### Backend (`backend/.env`)
 
-| Variable | Required | Purpose |
+| Variable | Default | Purpose |
 | --- | --- | --- |
-| `APP_ENV` | No | Runtime label: `development`, `test`, or `production`. |
-| `DATA_MODE` | No | `mock` by default; set to `snowflake` for live data. |
-| `CORS_ORIGINS` | No | Comma-separated allowed frontend origins. |
-| `GITHUB_TOKEN` | No | Fine-grained, read-only token for higher GitHub API limits and ingestion. |
-| `SNOWFLAKE_ACCOUNT` | Live mode | Snowflake organization/account identifier. |
-| `SNOWFLAKE_USER` | Live mode | Dedicated Snowflake service user. |
-| `SNOWFLAKE_PRIVATE_KEY_FILE` | Live mode | Absolute path to the service user's private key. |
-| `SNOWFLAKE_PRIVATE_KEY_PASSPHRASE` | No | Passphrase when the private key is encrypted. |
-| `SNOWFLAKE_ROLE` | Live mode | Read-only application role; defaults to `DASHBOARD_ROLE`. |
-| `SNOWFLAKE_WAREHOUSE` | Live mode | Query warehouse; defaults to `HACKATHON_WH`. |
-| `SNOWFLAKE_DATABASE` | Live mode | Database; defaults to `SUPPLY_CHAIN_MONITOR`. |
-| `SNOWFLAKE_SCHEMA` | Live mode | Schema; defaults to `DETECTION`. |
+| `APP_ENV` | `development` | Runtime environment label. |
+| `DATA_MODE` | `github` | Use `github` for onboarding and live scans; `snowflake` enables stored analytics endpoints. |
+| `CORS_ORIGINS` | `http://localhost:5173` | Comma-separated frontend origins. |
+| `GITHUB_TOKEN` | empty | Optional server-side GitHub credential fallback. |
+| `SNOWFLAKE_*` | placeholders | Optional hosted-storage configuration. |
 
-Use repository secrets—not committed files—for the values referenced by `.github/workflows/ingest.yml`.
-
-## Live Snowflake setup
-
-1. Review and run `backend/sql/001_schema.sql` to create the data model.
-2. Run `backend/sql/002_detection.sql` to create detection views and procedures.
-3. Review `backend/sql/003_access.sql`, replace its example service-user names if needed, and run it with the appropriate administrative roles.
-4. Register the service user's public key in Snowflake. Keep the private key outside the repository.
-5. Copy `backend/.env.example` to `backend/.env`, set `DATA_MODE=snowflake`, and fill in the `SNOWFLAKE_*` values locally.
-6. Add the Snowflake and GitHub values required by `.github/workflows/ingest.yml` as GitHub Actions repository secrets.
-
-Run ingestion manually from `backend/` with:
-
-```powershell
-python -m app.cli ingest --sources all --lookback-hours 3
-```
-
-The scheduled workflow ingests GH Archive hourly and refreshes advisory data daily. Checkpoints and event IDs make repeated ingestion idempotent.
-
-## Architecture
-
-```mermaid
-flowchart LR
-    GH[GH Archive] --> INGEST[Checkpointed ingestion]
-    GHA[GitHub APIs and advisories] --> INGEST
-    OSV[OSV] --> INGEST
-    INGEST --> SF[(Snowflake)]
-    SF --> DETECT[SQL detection views and procedures]
-    DETECT --> SCORE[Composite risk scores]
-    SCORE --> API[FastAPI]
-    API --> UI[React dashboard]
-```
-
-The repository currently implements live ingestion, Snowflake `MERGE` operations, advisory and SBOM enrichment, three behavioral detectors, dependency exposure matching, composite scoring, repository-risk and dashboard procedures, a FastAPI service, and the React analytics dashboard.
-
-## Repository structure
-
-```text
-app/                  Frontend routes and layout
-components/           Dashboard and shared UI components
-lib/                  Frontend API client and utilities
-backend/app/          FastAPI application, services, and ingestion
-backend/sql/          Snowflake schema, detection logic, and RBAC
-backend/tests/        Backend tests
-.github/workflows/    CI and scheduled ingestion
-```
-
-## API endpoints
+## API
 
 - `GET /health`
-- `GET /api/v1/dashboard/overview`
-- `GET /api/v1/findings?severity=critical&limit=50`
-- `GET /api/v1/repositories/{owner}/{repo}/risk`
 - `POST /api/v1/github/validate`
+- `GET /api/v1/github/repositories`
 - `POST /api/v1/repositories/{owner}/{repo}/analyze`
 
-For one-request GitHub analysis, the client may send a token in `X-GitHub-Token`. The backend does not persist or log that header.
+The GitHub endpoints require `X-GitHub-Token` unless `GITHUB_TOKEN` is configured locally.
 
 ## Validate changes
 
 ```powershell
 npm run lint
+.\node_modules\.bin\tsc.cmd --noEmit
 npm run build
 
 cd backend
 python -m pytest
 python -m ruff check .
 ```
+
+## Production authentication
+
+Fine-grained token onboarding makes the project easy to run locally. A hosted multi-user deployment should use a GitHub App installation flow so users can select repositories and revoke access without pasting a personal token into the application.

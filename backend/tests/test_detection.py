@@ -8,6 +8,7 @@ from app.domain.detection import (
     risk_level,
     suspicious_commit_messages,
 )
+from app.routers.github import github_risk
 
 
 def event(
@@ -75,3 +76,27 @@ def test_combined_score_and_levels() -> None:
     assert combined_score([70, 50]) == 85
     assert risk_level(85) == "critical"
     assert risk_level(64.9) == "medium"
+
+
+def test_github_risk_uses_real_dependabot_severity() -> None:
+    end = datetime.now(UTC)
+    risk = github_risk(
+        "acme/example",
+        [
+            {
+                "number": 7,
+                "dependency": {"package": {"name": "example-package"}},
+                "security_advisory": {"ghsa_id": "GHSA-test", "severity": "critical"},
+                "security_vulnerability": {
+                    "package": {"ecosystem": "npm", "name": "example-package"},
+                    "vulnerable_version_range": "< 2.0.0",
+                },
+            }
+        ],
+        end - timedelta(days=30),
+        end,
+    )
+
+    assert risk.composite_score == 95
+    assert risk.risk_level == "critical"
+    assert risk.dependency_exposures[0].advisory_id == "GHSA-test"

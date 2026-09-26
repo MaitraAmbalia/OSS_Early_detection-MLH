@@ -3,7 +3,6 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app import mock_data
 from app.config import Settings
 from app.dependencies import settings_dependency, snowflake_dependency
 from app.models import DashboardOverview, FindingsPage, RepositoryRisk
@@ -36,8 +35,11 @@ def dashboard_overview(
     end: datetime | None = None,
 ) -> DashboardOverview:
     window_start, window_end = date_window(start, end)
-    if settings.data_mode == "mock":
-        return mock_data.overview()
+    if settings.data_mode == "github":
+        raise HTTPException(
+            status_code=409,
+            detail="Aggregate analytics require DATA_MODE=snowflake",
+        )
     try:
         return snowflake.overview(window_start, window_end)
     except Exception as error:
@@ -51,12 +53,11 @@ def list_findings(
     severity: Literal["critical", "high", "medium", "low"] | None = None,
     limit: FindingsLimit = 50,
 ) -> FindingsPage:
-    if settings.data_mode == "mock":
-        page = mock_data.findings()
-        if severity:
-            page.items = [item for item in page.items if item.risk_level == severity]
-        page.items = page.items[:limit]
-        return page
+    if settings.data_mode == "github":
+        raise HTTPException(
+            status_code=409,
+            detail="Aggregate findings require DATA_MODE=snowflake",
+        )
     try:
         return snowflake.findings(severity, limit)
     except Exception as error:
@@ -74,8 +75,11 @@ def repository_risk(
 ) -> RepositoryRisk:
     window_start, window_end = date_window(start, end)
     repo_name = f"{owner}/{repo}"
-    if settings.data_mode == "mock":
-        return mock_data.repository_risk(repo_name, window_start, window_end)
+    if settings.data_mode == "github":
+        raise HTTPException(
+            status_code=409,
+            detail="Stored repository risk requires DATA_MODE=snowflake",
+        )
     try:
         return snowflake.repository_risk(repo_name, window_start, window_end)
     except LookupError as error:

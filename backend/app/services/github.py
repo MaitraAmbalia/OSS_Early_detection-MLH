@@ -28,13 +28,15 @@ class GitHubClient:
             headers["Authorization"] = f"Bearer {self.token}"
         return headers
 
-    async def _get(self, path: str) -> tuple[dict[str, Any], httpx.Headers]:
+    async def _get(
+        self, path: str, *, params: dict[str, object] | None = None
+    ) -> tuple[Any, httpx.Headers]:
         async with httpx.AsyncClient(
             base_url=self.settings.github_api_url,
             headers=self._headers(),
             timeout=self.settings.request_timeout_seconds,
         ) as client:
-            response = await client.get(path)
+            response = await client.get(path, params=params)
         if response.status_code >= 400:
             detail = response.json().get("message", "GitHub request failed")
             raise GitHubApiError(response.status_code, detail)
@@ -48,6 +50,28 @@ class GitHubClient:
             scope.strip() for scope in headers.get("x-oauth-scopes", "").split(",") if scope.strip()
         ]
         return GitHubIdentity(login=payload["login"], account_id=payload["id"], scopes=scopes)
+
+    async def repositories(self, *, max_pages: int = 10) -> list[dict[str, Any]]:
+        if not self.token:
+            raise GitHubApiError(401, "A GitHub token is required")
+        repositories: list[dict[str, Any]] = []
+        for page in range(1, max_pages + 1):
+            payload, _ = await self._get(
+                "/user/repos",
+                params={
+                    "affiliation": "owner,collaborator,organization_member",
+                    "sort": "updated",
+                    "direction": "desc",
+                    "per_page": 100,
+                    "page": page,
+                },
+            )
+            if not isinstance(payload, list):
+                raise GitHubApiError(502, "GitHub returned an invalid repository list")
+            repositories.extend(payload)
+            if len(payload) < 100:
+                break
+        return repositories
 
     async def repository(self, owner: str, repo: str) -> dict[str, Any]:
         payload, _ = await self._get(f"/repos/{owner}/{repo}")
@@ -66,6 +90,24 @@ class GitHubClient:
             for package in packages
             if package.get("name")
         ]
+
+    async def dependabot_alerts(
+        self, owner: str, repo: str, *, max_pages: int = 10
+    ) -> list[dict[str, Any]]:
+        if not self.token:
+            raise GitHubApiError(401, "A GitHub token is required")
+        alerts: list[dict[str, Any]] = []
+        for page in range(1, max_pages + 1):
+            payload, _ = await self._get(
+                f"/repos/{owner}/{repo}/dependabot/alerts",
+                params={"state": "open", "per_page": 100, "page": page},
+            )
+            if not isinstance(payload, list):
+                raise GitHubApiError(502, "GitHub returned invalid Dependabot alert data")
+            alerts.extend(payload)
+            if len(payload) < 100:
+                break
+        return alerts
 
     async def global_advisories(
         self, *, per_page: int = 100, max_pages: int = 10

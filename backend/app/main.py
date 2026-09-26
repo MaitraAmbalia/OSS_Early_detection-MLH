@@ -13,7 +13,7 @@ settings = get_settings()
 app = FastAPI(
     title="Sentinel OSS API",
     version="0.1.0",
-    description="Read-only analytics and repository analysis API for OSS supply-chain risk.",
+    description="GitHub repository dependency and vulnerability monitoring API.",
 )
 
 app.add_middleware(

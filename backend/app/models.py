@@ -9,7 +9,7 @@ RiskLevel = Literal["critical", "high", "medium", "low"]
 class HealthResponse(BaseModel):
     status: Literal["ok"] = "ok"
     service: str = "sentinel-oss-api"
-    data_mode: Literal["mock", "snowflake"]
+    data_mode: Literal["github", "snowflake"]
     timestamp: datetime
 
 
@@ -95,6 +95,19 @@ class GitHubIdentity(BaseModel):
     scopes: list[str]
 
 
+class GitHubRepositorySummary(BaseModel):
+    full_name: str
+    private: bool
+    default_branch: str
+    html_url: str
+    updated_at: datetime
+    archived: bool = False
+
+
+class GitHubRepositories(BaseModel):
+    items: list[GitHubRepositorySummary]
+
+
 class SbomPackage(BaseModel):
     name: str
     version: str | None
@@ -110,3 +123,5 @@ class RepositoryAnalysis(BaseModel):
     ecosystems: list[str]
     packages: list[SbomPackage]
     risk: RepositoryRisk
+    vulnerability_status: Literal["available", "unavailable"]
+    vulnerability_message: str | None = None
