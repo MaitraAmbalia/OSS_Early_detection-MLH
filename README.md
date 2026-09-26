@@ -1,113 +1,176 @@
 # Sentinel OSS
 
-An OSS supply-chain early-warning board that correlates GitHub behavior with
-dependency advisories in Snowflake.
+Sentinel OSS is an early-warning dashboard for open-source supply-chain risk. It combines GitHub activity, dependency metadata, GitHub Security Advisories, and OSV data to surface suspicious repository behavior and vulnerable packages.
 
-## Architecture
+The project runs locally in credential-free mock mode. Snowflake and GitHub credentials are optional and are needed only for live data.
 
-The production design combines a long historical baseline with continuously
-ingested public events. Historical and live records meet in one non-overlapping
-view before detection, scoring, explanation, and serving.
+## What it detects
 
-```mermaid
-flowchart TB
-    subgraph INGEST["Data ingestion & federation"]
-        CYBER["Snowflake Marketplace — Cybersyn<br/>10.9B GitHub events · 2011–Jun 2026<br/>Zero-ETL direct share"]
-        LIVE["Live ingestion — GitHub Actions<br/>Hourly GH Archive delta via MERGE<br/>OSV.dev + GitHub Advisory DB<br/>GitHub SBOM + dependency graphs"]
-    end
+- A new collaborator pushing code within 24 hours.
+- One actor pushing across many repositories in a short window.
+- Suspicious commit-message patterns linked to install hooks, obfuscation, credential access, or download-and-execute behavior.
+- Repository dependencies whose resolved versions match GitHub Advisory or OSV affected ranges.
+- A combined 0–100 risk score using a complement-product heuristic.
 
-    CYBER --> UNIFIED
-    LIVE --> UNIFIED
-    UNIFIED["GITHUB_EVENTS_UNIFIED<br/>Non-overlapping historical + live window"]
-    UNIFIED --> ENGINE
-    ENGINE["Behavioral detection engine<br/>Multi-step CTEs · window functions · VARIANT parsing"]
+This is a triage tool, not an automatic vulnerability verdict. Findings should always be reviewed by a human.
 
-    ENGINE --> S1
-    ENGINE --> S2
-    ENGINE --> S3
-    ENGINE --> S4
+## Tech stack
 
-    subgraph SIGNALS["Detection signals"]
-        direction LR
-        S1["1 · New collaborator fast-push<br/>MAD on log1p(time-to-push)"]
-        S2["2 · Multi-repo burst<br/>Worm-spread detection · Shannon entropy"]
-        S3["3 · Suspicious commit messages<br/>Regex + payload inspection"]
-        S4["4 · Delete-after-push<br/>Evidence-erasure detection · rolling joins"]
-    end
+- **Frontend:** React 19, TypeScript, Vinext/Vite, Tailwind CSS, shadcn/ui, and Recharts.
+- **Backend:** Python 3.11+, FastAPI, Pydantic, HTTPX, and Uvicorn.
+- **Data and security:** Snowflake, GH Archive, GitHub APIs/SBOM, GitHub Advisory Database, and OSV.
+- **Automation:** GitHub Actions for CI and scheduled ingestion.
 
-    S1 --> MATERIALIZED
-    S2 --> MATERIALIZED
-    S3 --> MATERIALIZED
-    S4 --> MATERIALIZED
-    MATERIALIZED["CTAS materialization<br/>Precomputed SIGNAL_* feature and score tables"]
-    MATERIALIZED --> RISK
-    RISK["Risk composite engine<br/>Noisy-OR: 1 - product(1 - p_i)<br/>Cross-signal anti-double-counting<br/>RISK_SCORES: 0–100 · Critical / High / Medium / Low"]
-    RISK --> AI
-    AI["AI explanation layer<br/>SNOWFLAKE.CORTEX.COMPLETE('llama3.1-8b')<br/>Top 50 multi-signal alerts"]
+## Snowflake technology used
 
-    AI --> API
-    AI --> VISUAL
-    API["API & programmatic serving<br/>CHECK_REPO_RISK stored procedure<br/>GET_REPO_RISK SQL UDF"]
-    VISUAL["Visual serving<br/>Streamlit in Snowflake<br/>Leaderboard · lookup · deep-dive · blast radius"]
-```
+In short, the implemented Snowflake path uses:
 
-### Implementation status
+- tables for events, advisories, dependencies, checkpoints, and risk scores;
+- `VARIANT` and `LATERAL FLATTEN` for semi-structured GitHub payloads;
+- idempotent `MERGE` statements for checkpointed ingestion;
+- SQL views and window functions for behavioral detection;
+- stored procedures for score refresh, repository lookup, and dashboard summaries;
+- separate warehouses, service users, and least-privilege roles for ingestion and read-only dashboard access;
+- key-pair authentication from the FastAPI service.
 
-The diagram above is the target production architecture. The repository already
-implements the live-ingestion path, checkpointed Snowflake `MERGE`, OSV and
-GitHub advisory enrichment, GitHub SBOM analysis, three behavioral detectors,
-complement-product risk scoring, `CHECK_REPO_RISK`, a FastAPI service, and the
-React analytics dashboard.
+The architecture also documents future extensions such as Cybersyn Marketplace history, Cortex explanations, CTAS feature tables, a SQL UDF, and Streamlit in Snowflake. These are not presented as implemented features.
 
-The Cybersyn federation layer, robust MAD/entropy feature models,
-delete-after-push signal, CTAS `SIGNAL_*` tables, Cortex explanations,
-`GET_REPO_RISK` UDF, and Streamlit-in-Snowflake interface are production-path
-extensions. This distinction keeps the deployable hackathon build accurate
-while documenting how it scales into the full system.
+## Run locally
 
-## Repository
+### Prerequisites
 
-- `app/`, `components/`, `lib/` — analytics-focused React/Vinext dashboard
-- `backend/` — FastAPI API, GitHub clients, ingestion jobs, and detectors
-- `backend/sql/` — Snowflake schema, detection views/procedures, and grants
-- `.github/workflows/` — CI and scheduled ingestion
+- Node.js 22.13 or newer
+- npm
+- Python 3.11 or newer
 
-## Local demo
-
-The default is credential-free mock mode:
+### 1. Clone the repository
 
 ```powershell
-cd A:\MLH\backend
-Copy-Item .env.example .env
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
+git clone https://github.com/MaitraAmbalia/OSS_Early_detection-MLH.git
+cd OSS_Early_detection-MLH
+```
 
-cd A:\MLH
+### 2. Start the backend
+
+In the first PowerShell terminal:
+
+```powershell
+cd backend
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e ".[dev]"
+Copy-Item .env.example .env
+python -m uvicorn app.main:app --reload --port 8000
+```
+
+Mock mode is enabled by default, so no external credentials are required. The API is available at `http://127.0.0.1:8000`, with interactive documentation at `http://127.0.0.1:8000/docs`.
+
+### 3. Start the frontend
+
+In a second PowerShell terminal, from the repository root:
+
+```powershell
+npm ci
 Copy-Item .env.example .env.local
 npm run dev
 ```
 
+Open `http://localhost:5173`.
+
+On macOS or Linux, use `python3 -m venv .venv`, `source .venv/bin/activate`, and `cp` instead of the PowerShell-specific commands.
+
+## Environment variables
+
+Never commit `.env`, `.env.local`, private keys, passwords, or tokens. The repository tracks only safe `.env.example` templates, and `.gitignore` excludes real environment files and `*.pem` keys.
+
+### Frontend (`.env.local`)
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `NEXT_PUBLIC_API_BASE_URL` | No | Backend URL; defaults to `http://127.0.0.1:8000`. |
+
+### Backend (`backend/.env`)
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `APP_ENV` | No | Runtime label: `development`, `test`, or `production`. |
+| `DATA_MODE` | No | `mock` by default; set to `snowflake` for live data. |
+| `CORS_ORIGINS` | No | Comma-separated allowed frontend origins. |
+| `GITHUB_TOKEN` | No | Fine-grained, read-only token for higher GitHub API limits and ingestion. |
+| `SNOWFLAKE_ACCOUNT` | Live mode | Snowflake organization/account identifier. |
+| `SNOWFLAKE_USER` | Live mode | Dedicated Snowflake service user. |
+| `SNOWFLAKE_PRIVATE_KEY_FILE` | Live mode | Absolute path to the service user's private key. |
+| `SNOWFLAKE_PRIVATE_KEY_PASSPHRASE` | No | Passphrase when the private key is encrypted. |
+| `SNOWFLAKE_ROLE` | Live mode | Read-only application role; defaults to `DASHBOARD_ROLE`. |
+| `SNOWFLAKE_WAREHOUSE` | Live mode | Query warehouse; defaults to `HACKATHON_WH`. |
+| `SNOWFLAKE_DATABASE` | Live mode | Database; defaults to `SUPPLY_CHAIN_MONITOR`. |
+| `SNOWFLAKE_SCHEMA` | Live mode | Schema; defaults to `DETECTION`. |
+
+Use repository secrets—not committed files—for the values referenced by `.github/workflows/ingest.yml`.
+
 ## Live Snowflake setup
 
-1. Run `backend/sql/001_schema.sql`.
-2. Run `backend/sql/002_detection.sql`.
-3. Run `backend/sql/003_access.sql`.
-4. Register the service user's public key.
-5. Set `DATA_MODE=snowflake` and the `SNOWFLAKE_*` variables.
-6. Add the secrets referenced by `.github/workflows/ingest.yml`.
+1. Review and run `backend/sql/001_schema.sql` to create the data model.
+2. Run `backend/sql/002_detection.sql` to create detection views and procedures.
+3. Review `backend/sql/003_access.sql`, replace its example service-user names if needed, and run it with the appropriate administrative roles.
+4. Register the service user's public key in Snowflake. Keep the private key outside the repository.
+5. Copy `backend/.env.example` to `backend/.env`, set `DATA_MODE=snowflake`, and fill in the `SNOWFLAKE_*` values locally.
+6. Add the Snowflake and GitHub values required by `.github/workflows/ingest.yml` as GitHub Actions repository secrets.
 
-The workflow ingests GH Archive every hour and GitHub/OSV advisory data daily.
-Every source is checkpointed, GitHub event IDs are merged idempotently, and
-dependency matches use npm SemVer or Python PEP 440 rules when applicable.
+Run ingestion manually from `backend/` with:
 
-## Detection model
+```powershell
+python -m app.cli ingest --sources all --lookback-hours 3
+```
 
-- collaborator added, followed by that actor pushing within 24 hours;
-- ten or more distinct repositories pushed by one actor in a sliding hour;
-- low-confidence commit-message patterns for install hooks, obfuscation,
-  credential access, and download/execute behavior;
-- resolved dependency versions that fall inside GHSA/OSV affected ranges.
+The scheduled workflow ingests GH Archive hourly and refreshes advisory data daily. Checkpoints and event IDs make repeated ingestion idempotent.
 
-Scores are combined as independent evidence using the complement product. This
-is a ranking heuristic, not a claim of Bayesian probability. GitHub Archive has
-commit messages but no file diffs, so suspicious-message evidence is capped and
-always requires review.
+## Architecture
+
+```mermaid
+flowchart LR
+    GH[GH Archive] --> INGEST[Checkpointed ingestion]
+    GHA[GitHub APIs and advisories] --> INGEST
+    OSV[OSV] --> INGEST
+    INGEST --> SF[(Snowflake)]
+    SF --> DETECT[SQL detection views and procedures]
+    DETECT --> SCORE[Composite risk scores]
+    SCORE --> API[FastAPI]
+    API --> UI[React dashboard]
+```
+
+The repository currently implements live ingestion, Snowflake `MERGE` operations, advisory and SBOM enrichment, three behavioral detectors, dependency exposure matching, composite scoring, repository-risk and dashboard procedures, a FastAPI service, and the React analytics dashboard.
+
+## Repository structure
+
+```text
+app/                  Frontend routes and layout
+components/           Dashboard and shared UI components
+lib/                  Frontend API client and utilities
+backend/app/          FastAPI application, services, and ingestion
+backend/sql/          Snowflake schema, detection logic, and RBAC
+backend/tests/        Backend tests
+.github/workflows/    CI and scheduled ingestion
+```
+
+## API endpoints
+
+- `GET /health`
+- `GET /api/v1/dashboard/overview`
+- `GET /api/v1/findings?severity=critical&limit=50`
+- `GET /api/v1/repositories/{owner}/{repo}/risk`
+- `POST /api/v1/github/validate`
+- `POST /api/v1/repositories/{owner}/{repo}/analyze`
+
+For one-request GitHub analysis, the client may send a token in `X-GitHub-Token`. The backend does not persist or log that header.
+
+## Validate changes
+
+```powershell
+npm run lint
+npm run build
+
+cd backend
+python -m pytest
+python -m ruff check .
+```

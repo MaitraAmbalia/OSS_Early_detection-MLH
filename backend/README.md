@@ -5,7 +5,7 @@ FastAPI service for the analytics dashboard. It keeps browser clients away from 
 ## Local development
 
 ```powershell
-cd A:\MLH\backend
+cd backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
