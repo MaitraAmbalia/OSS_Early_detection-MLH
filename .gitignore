@@ -1,0 +1,53 @@
+# Local dependency and tool state
+/node_modules/
+/.npm-cache/
+/.snowcli-venv/
+/.snowflake-cli/
+.venv/
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# Generated frontend output
+/.next/
+/.vinext/
+/dist/
+/out/
+/.wrangler/
+/.sites-runtime/
+/coverage/
+next-env.d.ts
+
+# The old nested frontend directory now contains only ignored local artifacts.
+/supply-chain-board/
+
+# Local agent state
+/.agents/
+/.codex/
+/outputs/
+/work/
+
+# Python output
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.py[cod]
+*.egg-info/
+.coverage
+
+# Environment and credentials
+.env
+.env.*
+!.env.example
+*.pem
+
+# Logs and OS files
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+.DS_Store

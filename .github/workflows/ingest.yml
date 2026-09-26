@@ -1,0 +1,53 @@
+name: Supply-chain ingestion
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+    - cron: "43 2 * * *"
+  workflow_dispatch:
+    inputs:
+      sources:
+        description: Sources to ingest
+        default: all
+        type: choice
+        options: [all, gharchive, advisories, osv]
+
+concurrency:
+  group: sentinel-ingestion
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DATA_MODE: snowflake
+      SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+      SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+      SNOWFLAKE_PRIVATE_KEY_FILE: ${{ runner.temp }}/snowflake_key.p8
+      SNOWFLAKE_PRIVATE_KEY_PASSPHRASE: ${{ secrets.SNOWFLAKE_PRIVATE_KEY_PASSPHRASE }}
+      SNOWFLAKE_ROLE: INGESTION_ROLE
+      SNOWFLAKE_WAREHOUSE: INGEST_WH
+      SNOWFLAKE_DATABASE: SUPPLY_CHAIN_MONITOR
+      SNOWFLAKE_SCHEMA: DETECTION
+      GITHUB_TOKEN: ${{ secrets.MONITOR_GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install .
+      - name: Write Snowflake private key
+        shell: bash
+        run: printf '%s' "$SNOWFLAKE_PRIVATE_KEY" > "$SNOWFLAKE_PRIVATE_KEY_FILE"
+        env:
+          SNOWFLAKE_PRIVATE_KEY: ${{ secrets.SNOWFLAKE_PRIVATE_KEY }}
+      - name: Ingest hourly GH Archive data
+        if: github.event_name == 'workflow_dispatch' || github.event.schedule == '17 * * * *'
+        run: python -m app.cli ingest --sources "${{ inputs.sources || 'gharchive' }}" --lookback-hours 3
+      - name: Refresh advisories and OSV
+        if: github.event_name == 'schedule' && github.event.schedule == '43 2 * * *'
+        run: python -m app.cli ingest --sources advisories,osv --lookback-hours 1
