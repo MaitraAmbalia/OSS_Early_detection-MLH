@@ -21,6 +21,7 @@
 /.sites-runtime/
 /coverage/
 next-env.d.ts
+*.tsbuildinfo
 
 # The old nested frontend directory now contains only ignored local artifacts.
 /supply-chain-board/

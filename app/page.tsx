@@ -14,7 +14,7 @@ type Finding = {
   repo: string;
   actor: string;
   score: number;
-  level: "critical" | "high" | "medium";
+  level: "critical" | "high" | "medium" | "low";
   signal: string;
   evidence: string;
   time: string;
@@ -31,7 +31,7 @@ const fallbackFindings: Finding[] = [
 const series = [18, 22, 17, 28, 25, 34, 29, 43, 38, 55, 49, 71, 62, 82, 76, 91];
 
 function RiskBadge({ level }: { level: Finding["level"] }) {
-  const styles = { critical: "border-red-400/25 bg-red-400/10 text-red-300", high: "border-amber-300/25 bg-amber-300/10 text-amber-200", medium: "border-blue-300/25 bg-blue-300/10 text-blue-200" };
+  const styles = { critical: "border-red-400/25 bg-red-400/10 text-red-300", high: "border-amber-300/25 bg-amber-300/10 text-amber-200", medium: "border-blue-300/25 bg-blue-300/10 text-blue-200", low: "border-emerald-300/25 bg-emerald-300/10 text-emerald-200" };
   return <Badge variant="outline" className={`capitalize ${styles[level]}`}>{level}</Badge>;
 }
 
@@ -62,6 +62,9 @@ export default function Home() {
   const [token, setToken] = useState("");
   const [connected, setConnected] = useState(false);
   const [identity, setIdentity] = useState("");
+  const [connectOpen, setConnectOpen] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [showAllExposures, setShowAllExposures] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [overview, setOverview] = useState<ApiOverview | null>(null);
   const [findings, setFindings] = useState<Finding[]>(fallbackFindings);
@@ -74,6 +77,11 @@ export default function Home() {
     [filter, findings],
   );
 
+  function goTo(sectionId: string) {
+    document.getElementById(sectionId)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setMobileNavOpen(false);
+  }
+
   useEffect(() => {
     Promise.all([api.overview(), api.findings()])
       .then(([nextOverview, page]) => {
@@ -83,7 +91,7 @@ export default function Home() {
           repo: item.repo_name,
           actor: item.actor_login,
           score: Math.round(item.composite_score),
-          level: item.risk_level === "low" ? "medium" : item.risk_level,
+          level: item.risk_level,
           signal: item.primary_signal.replaceAll("_", " "),
           evidence: item.evidence,
           time: new Date(item.latest_activity).toLocaleString(),
@@ -95,15 +103,15 @@ export default function Home() {
 
   async function analyze(event: FormEvent) {
     event.preventDefault();
-    const normalized = repo.trim().replace(/^https?:\/\/github\.com\//, "").replace(/\/$/, "");
-    if (!/^[^/]+\/[^/]+$/.test(normalized)) {
+    const normalized = repo.trim().replace(/^https?:\/\/github\.com\//i, "").replace(/\.git\/?$/, "").replace(/\/$/, "");
+    if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(normalized)) {
       setError("Enter a repository as owner/name.");
       return;
     }
     setAnalyzing(true);
     setError("");
     try {
-      setAnalysis(await api.analyze(normalized, token || undefined));
+      setAnalysis(await api.analyze(normalized, token.trim() || undefined));
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Analysis failed");
     } finally {
@@ -119,6 +127,7 @@ export default function Home() {
       const result = await api.validateToken(token.trim());
       setIdentity(result.login);
       setConnected(true);
+      setConnectOpen(false);
     } catch (requestError) {
       setConnected(false);
       setError(requestError instanceof Error ? requestError.message : "Token validation failed");
@@ -153,7 +162,7 @@ export default function Home() {
     { label: "Advisories", age: "3h", cadence: "Daily", healthy: true },
     { label: "OSV", age: "8h", cadence: "Daily", healthy: true },
   ];
-  const exposureRows = analysis?.risk.dependency_exposures.length
+  const exposureRows = analysis
     ? analysis.risk.dependency_exposures.map((item) => ({
         name: item.package_name,
         version: item.resolved_version ?? "unknown",
@@ -175,29 +184,29 @@ export default function Home() {
             <div><p className="text-[15px] font-semibold leading-none tracking-tight">Sentinel OSS</p><p className="mt-1 text-[11px] leading-none text-muted-foreground">Supply-chain intelligence</p></div>
           </div>
           <nav className="ml-8 hidden items-center gap-1 md:flex" aria-label="Primary navigation">
-            <Button variant="ghost" size="sm" className="bg-white/[0.06] text-foreground">Overview</Button>
-            <Button variant="ghost" size="sm" className="text-muted-foreground">Dependencies</Button>
-            <Button variant="ghost" size="sm" className="text-muted-foreground">Activity</Button>
+            <Button variant="ghost" size="sm" className="bg-white/[0.06] text-foreground" onClick={() => goTo("overview")}>Overview</Button>
+            <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => goTo("dependencies")}>Dependencies</Button>
+            <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => goTo("activity")}>Activity</Button>
           </nav>
           <div className="ml-auto flex items-center gap-2">
             <div className="mr-2 hidden items-center gap-2 text-xs text-muted-foreground sm:flex"><span className="h-1.5 w-1.5 rounded-full bg-emerald-300 shadow-[0_0_8px_#79f2bd]" />{overview ? "API connected" : "Demo data"}</div>
-            <Dialog>
+            <Dialog open={connectOpen} onOpenChange={setConnectOpen}>
               <DialogTrigger asChild><Button size="sm" variant={connected ? "secondary" : "default"}>{connected ? <Check className="h-4 w-4" /> : <KeyRound className="h-4 w-4" />}{connected ? `Connected: ${identity}` : "Connect GitHub"}</Button></DialogTrigger>
               <DialogContent className="border-white/10 bg-[#0b1715] sm:max-w-md">
                 <DialogHeader><DialogTitle>Connect GitHub for repository analysis</DialogTitle><DialogDescription>Use a fine-grained, read-only token. This prototype keeps it only in memory for the current session.</DialogDescription></DialogHeader>
                 <form onSubmit={connect} className="space-y-4 pt-2">
-                  <div className="space-y-2"><label htmlFor="github-token" className="text-sm font-medium">Personal access token</label><Input id="github-token" type="password" autoComplete="off" placeholder="github_pat_••••••••" value={token} onChange={(e) => setToken(e.target.value)} /></div>
+                  <div className="space-y-2"><label htmlFor="github-token" className="text-sm font-medium">Personal access token</label><Input id="github-token" type="password" autoComplete="off" placeholder="github_pat_••••••••" value={token} onChange={(e) => { setToken(e.target.value); setConnected(false); setIdentity(""); }} /></div>
                   <div className="rounded-lg border border-emerald-300/15 bg-emerald-300/[0.05] p-3 text-xs leading-5 text-emerald-100/70">Recommended permission: repository contents read-only. Never grant write or administration access for analysis.</div>
                   <Button type="submit" className="w-full" disabled={!token.trim()}>Connect securely</Button>
                 </form>
               </DialogContent>
             </Dialog>
-            <Button size="icon-sm" variant="ghost" className="md:hidden"><Menu className="h-4 w-4" /><span className="sr-only">Open menu</span></Button>
+            <Button size="icon-sm" variant="ghost" className="md:hidden" onClick={() => setMobileNavOpen(true)}><Menu className="h-4 w-4" /><span className="sr-only">Open menu</span></Button>
           </div>
         </div>
       </header>
 
-      <div className="mx-auto max-w-[1540px] px-4 py-5 sm:px-6 lg:px-8 lg:py-7">
+      <div id="overview" className="mx-auto max-w-[1540px] scroll-mt-20 px-4 py-5 sm:px-6 lg:px-8 lg:py-7">
         {error && <div className="mb-4 rounded-lg border border-amber-300/20 bg-amber-300/[0.07] px-4 py-3 text-sm text-amber-100">{error}</div>}
         {analysis && <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-emerald-300/20 bg-emerald-300/[0.06] px-4 py-3 text-sm"><span><strong>{analysis.repository}</strong> analyzed: {analysis.dependency_count} dependencies across {analysis.ecosystems.join(", ") || "unknown ecosystems"}.</span><Badge variant="secondary">Risk {Math.round(analysis.risk.composite_score)}/100</Badge></div>}
         <section className="mb-5 flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
@@ -231,20 +240,31 @@ export default function Home() {
           </article>
         </section>
 
-        <section className="mt-3 overflow-hidden rounded-xl border border-white/[0.07] bg-card/80">
-          <div className="flex flex-col gap-3 border-b border-white/[0.07] p-4 sm:flex-row sm:items-center sm:justify-between sm:px-5"><div><h2 className="text-sm font-medium">Investigation queue</h2><p className="mt-1 text-xs text-muted-foreground">Ranked by combined behavioral and dependency risk</p></div><div className="flex gap-1 overflow-x-auto">{(["all", "critical", "high", "medium"] as const).map((level) => <Button key={level} size="xs" variant={filter === level ? "secondary" : "ghost"} onClick={() => setFilter(level)} className="capitalize">{level}</Button>)}</div></div>
-          <div className="overflow-x-auto"><table className="w-full min-w-[860px] text-left text-sm"><thead className="border-b border-white/[0.06] text-[11px] uppercase tracking-[0.12em] text-muted-foreground"><tr><th className="px-5 py-3 font-medium">Repository</th><th className="px-4 py-3 font-medium">Primary signal</th><th className="px-4 py-3 font-medium">Actor</th><th className="px-4 py-3 font-medium">Risk</th><th className="px-4 py-3 font-medium">Observed</th><th className="w-12" /></tr></thead><tbody className="divide-y divide-white/[0.055]">{visibleFindings.map((finding) => <tr key={finding.id} onClick={() => setSelected(finding)} className="cursor-pointer transition-colors hover:bg-white/[0.035]"><td className="px-5 py-3.5"><div className="font-medium">{finding.repo}</div><div className="mt-1 flex gap-1.5">{finding.tags.slice(0, 2).map((tag) => <span key={tag} className="text-[11px] text-muted-foreground">#{tag.replace(" ", "-")}</span>)}</div></td><td className="px-4 py-3.5"><div className="font-medium text-foreground/90">{finding.signal}</div><div className="mt-1 max-w-[360px] truncate text-xs text-muted-foreground">{finding.evidence}</div></td><td className="px-4 py-3.5 font-mono text-xs text-foreground/80">{finding.actor}</td><td className="px-4 py-3.5"><div className="flex items-center gap-2"><span className="w-6 font-semibold">{finding.score}</span><RiskBadge level={finding.level} /></div></td><td className="px-4 py-3.5 text-xs text-muted-foreground">{finding.time}</td><td className="pr-4"><ChevronRight className="h-4 w-4 text-muted-foreground" /></td></tr>)}</tbody></table></div>
+        <section id="activity" className="mt-3 scroll-mt-20 overflow-hidden rounded-xl border border-white/[0.07] bg-card/80">
+          <div className="flex flex-col gap-3 border-b border-white/[0.07] p-4 sm:flex-row sm:items-center sm:justify-between sm:px-5"><div><h2 className="text-sm font-medium">Investigation queue</h2><p className="mt-1 text-xs text-muted-foreground">Ranked by combined behavioral and dependency risk</p></div><div className="flex gap-1 overflow-x-auto">{(["all", "critical", "high", "medium", "low"] as const).map((level) => <Button key={level} size="xs" variant={filter === level ? "secondary" : "ghost"} onClick={() => setFilter(level)} className="capitalize">{level}</Button>)}</div></div>
+          <div className="overflow-x-auto"><table className="w-full min-w-[860px] text-left text-sm"><thead className="border-b border-white/[0.06] text-[11px] uppercase tracking-[0.12em] text-muted-foreground"><tr><th className="px-5 py-3 font-medium">Repository</th><th className="px-4 py-3 font-medium">Primary signal</th><th className="px-4 py-3 font-medium">Actor</th><th className="px-4 py-3 font-medium">Risk</th><th className="px-4 py-3 font-medium">Observed</th><th className="w-12" /></tr></thead><tbody className="divide-y divide-white/[0.055]">{visibleFindings.map((finding) => <tr key={finding.id} onClick={() => setSelected(finding)} className="cursor-pointer transition-colors hover:bg-white/[0.035]"><td className="px-5 py-3.5"><div className="font-medium">{finding.repo}</div><div className="mt-1 flex gap-1.5">{finding.tags.slice(0, 2).map((tag) => <span key={tag} className="text-[11px] text-muted-foreground">#{tag.replace(" ", "-")}</span>)}</div></td><td className="px-4 py-3.5"><div className="font-medium text-foreground/90">{finding.signal}</div><div className="mt-1 max-w-[360px] truncate text-xs text-muted-foreground">{finding.evidence}</div></td><td className="px-4 py-3.5 font-mono text-xs text-foreground/80">{finding.actor}</td><td className="px-4 py-3.5"><div className="flex items-center gap-2"><span className="w-6 font-semibold">{finding.score}</span><RiskBadge level={finding.level} /></div></td><td className="px-4 py-3.5 text-xs text-muted-foreground">{finding.time}</td><td className="pr-4"><ChevronRight className="h-4 w-4 text-muted-foreground" /></td></tr>)}{visibleFindings.length === 0 && <tr><td colSpan={6} className="px-5 py-10 text-center text-sm text-muted-foreground">No findings match this risk level.</td></tr>}</tbody></table></div>
         </section>
 
-        <section className="mt-3 grid gap-3 pb-8 lg:grid-cols-2">
-          <article className="rounded-xl border border-white/[0.07] bg-card/80 p-4 sm:p-5"><div className="flex items-center justify-between"><div><h2 className="text-sm font-medium">Dependency exposure</h2><p className="mt-1 text-xs text-muted-foreground">Confirmed matches against GHSA and OSV</p></div><Button variant="ghost" size="xs">View all <ChevronRight className="h-3.5 w-3.5" /></Button></div><div className="mt-4 space-y-2">{exposureRows.slice(0, 3).map((dep) => <div key={`${dep.name}-${dep.advisory}`} className="flex items-center gap-3 rounded-lg border border-white/[0.055] bg-black/10 p-3"><PackageSearch className="h-4 w-4 text-amber-200" /><div className="min-w-0 flex-1"><p className="text-sm font-medium">{dep.name} <span className="font-mono text-xs text-muted-foreground">{dep.version}</span></p><p className="mt-0.5 truncate text-xs text-muted-foreground">{dep.advisory}</p></div><span className="capitalize text-xs text-amber-200">{dep.severity}</span></div>)}</div></article>
+        <section id="dependencies" className="mt-3 grid scroll-mt-20 gap-3 pb-8 lg:grid-cols-2">
+          <article className="rounded-xl border border-white/[0.07] bg-card/80 p-4 sm:p-5"><div className="flex items-center justify-between"><div><h2 className="text-sm font-medium">Dependency exposure</h2><p className="mt-1 text-xs text-muted-foreground">Confirmed matches against GHSA and OSV</p></div>{exposureRows.length > 3 && <Button variant="ghost" size="xs" onClick={() => setShowAllExposures((value) => !value)}>{showAllExposures ? "Show less" : "View all"} <ChevronRight className={`h-3.5 w-3.5 transition-transform ${showAllExposures ? "rotate-90" : ""}`} /></Button>}</div><div className="mt-4 space-y-2">{(showAllExposures ? exposureRows : exposureRows.slice(0, 3)).map((dep) => <div key={`${dep.name}-${dep.advisory}`} className="flex items-center gap-3 rounded-lg border border-white/[0.055] bg-black/10 p-3"><PackageSearch className="h-4 w-4 text-amber-200" /><div className="min-w-0 flex-1"><p className="text-sm font-medium">{dep.name} <span className="font-mono text-xs text-muted-foreground">{dep.version}</span></p><p className="mt-0.5 truncate text-xs text-muted-foreground">{dep.advisory}</p></div><span className="capitalize text-xs text-amber-200">{dep.severity}</span></div>)}{exposureRows.length === 0 && <div className="rounded-lg border border-emerald-300/15 bg-emerald-300/[0.04] p-4 text-sm text-emerald-100/70">No confirmed dependency exposures were returned for this repository.</div>}</div></article>
           <article className="rounded-xl border border-white/[0.07] bg-card/80 p-4 sm:p-5"><div className="flex items-center justify-between"><div><h2 className="text-sm font-medium">Pipeline health</h2><p className="mt-1 text-xs text-muted-foreground">Freshness and coverage across sources</p></div><ShieldCheck className="h-5 w-5 text-emerald-200" /></div><div className="mt-5 grid grid-cols-3 gap-3">{pipelineRows.map((item) => <div key={item.label} className="rounded-lg border border-white/[0.055] bg-black/10 p-3"><div className="mb-3 flex items-center gap-2 text-xs capitalize text-muted-foreground"><span className={`h-1.5 w-1.5 rounded-full ${item.healthy ? "bg-emerald-300" : "bg-amber-300"}`} />{item.label}</div><p className="text-xl font-semibold">{item.age}</p><p className="mt-0.5 text-[11px] capitalize text-muted-foreground">{item.cadence} refresh</p></div>)}</div></article>
         </section>
       </div>
 
       <Sheet open={Boolean(selected)} onOpenChange={(open) => !open && setSelected(null)}>
-        <SheetContent className="w-full overflow-y-auto border-white/10 bg-[#0a1513] sm:max-w-lg">{selected && <><SheetHeader className="border-b border-white/[0.07] pb-5"><div className="mb-2 flex items-center gap-2"><RiskBadge level={selected.level} /><span className="font-mono text-xs text-muted-foreground">{selected.id}</span></div><SheetTitle className="text-xl">{selected.repo}</SheetTitle><SheetDescription>{selected.signal} · detected {selected.time}</SheetDescription></SheetHeader><div className="space-y-6 px-4 pb-8"><div className="rounded-xl border border-red-300/15 bg-red-300/[0.055] p-4"><p className="text-xs font-medium uppercase tracking-[0.12em] text-red-200/70">Combined risk</p><div className="mt-2 flex items-end gap-3"><span className="text-4xl font-semibold">{selected.score}</span><span className="mb-1 text-sm text-red-200">/ 100</span></div><p className="mt-3 text-sm leading-6 text-foreground/75">{selected.evidence}</p></div><div><h3 className="text-sm font-medium">Evidence timeline</h3><div className="mt-3 space-y-4 border-l border-white/10 pl-4">{[["Access changed", "Actor received repository access", "09:12"], ["First push", "Install-time script and workflow modified", "09:23"], ["Propagation", "Equivalent change reached additional repositories", "09:50"]].map((event) => <div key={event[0]} className="relative"><span className="absolute -left-[21px] top-1 h-2.5 w-2.5 rounded-full border-2 border-[#0a1513] bg-emerald-300" /><div className="flex justify-between gap-3"><p className="text-sm font-medium">{event[0]}</p><span className="text-xs text-muted-foreground">{event[2]}</span></div><p className="mt-1 text-xs text-muted-foreground">{event[1]}</p></div>)}</div></div><div><h3 className="text-sm font-medium">Signals fired</h3><div className="mt-3 flex flex-wrap gap-2">{selected.tags.map((tag) => <Badge key={tag} variant="secondary">{tag}</Badge>)}</div></div><div className="grid grid-cols-2 gap-3"><Button variant="secondary"><X className="h-4 w-4" />Dismiss</Button><Button><ExternalLink className="h-4 w-4" />Open on GitHub</Button></div></div></>}</SheetContent>
+        <SheetContent className="w-full overflow-y-auto border-white/10 bg-[#0a1513] sm:max-w-lg">{selected && <><SheetHeader className="border-b border-white/[0.07] pb-5"><div className="mb-2 flex items-center gap-2"><RiskBadge level={selected.level} /><span className="font-mono text-xs text-muted-foreground">{selected.id}</span></div><SheetTitle className="text-xl">{selected.repo}</SheetTitle><SheetDescription>{selected.signal} · detected {selected.time}</SheetDescription></SheetHeader><div className="space-y-6 px-4 pb-8"><div className="rounded-xl border border-red-300/15 bg-red-300/[0.055] p-4"><p className="text-xs font-medium uppercase tracking-[0.12em] text-red-200/70">Combined risk</p><div className="mt-2 flex items-end gap-3"><span className="text-4xl font-semibold">{selected.score}</span><span className="mb-1 text-sm text-red-200">/ 100</span></div><p className="mt-3 text-sm leading-6 text-foreground/75">{selected.evidence}</p></div><div><h3 className="text-sm font-medium">Evidence timeline</h3><div className="mt-3 space-y-4 border-l border-white/10 pl-4">{[["Access changed", "Actor received repository access", "09:12"], ["First push", "Install-time script and workflow modified", "09:23"], ["Propagation", "Equivalent change reached additional repositories", "09:50"]].map((event) => <div key={event[0]} className="relative"><span className="absolute -left-[21px] top-1 h-2.5 w-2.5 rounded-full border-2 border-[#0a1513] bg-emerald-300" /><div className="flex justify-between gap-3"><p className="text-sm font-medium">{event[0]}</p><span className="text-xs text-muted-foreground">{event[2]}</span></div><p className="mt-1 text-xs text-muted-foreground">{event[1]}</p></div>)}</div></div><div><h3 className="text-sm font-medium">Signals fired</h3><div className="mt-3 flex flex-wrap gap-2">{selected.tags.map((tag) => <Badge key={tag} variant="secondary">{tag}</Badge>)}</div></div><div className="grid grid-cols-2 gap-3"><Button variant="secondary" onClick={() => setSelected(null)}><X className="h-4 w-4" />Dismiss</Button><Button asChild><a href={`https://github.com/${selected.repo}`} target="_blank" rel="noreferrer"><ExternalLink className="h-4 w-4" />Open on GitHub</a></Button></div></div></>}</SheetContent>
       </Sheet>
+
+      <Dialog open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
+        <DialogContent className="border-white/10 bg-[#0b1715] sm:max-w-sm">
+          <DialogHeader><DialogTitle>Navigate Sentinel OSS</DialogTitle><DialogDescription>Jump to a dashboard section.</DialogDescription></DialogHeader>
+          <nav className="grid gap-2" aria-label="Mobile navigation">
+            <Button variant="secondary" onClick={() => goTo("overview")}>Overview</Button>
+            <Button variant="ghost" onClick={() => goTo("dependencies")}>Dependencies</Button>
+            <Button variant="ghost" onClick={() => goTo("activity")}>Activity</Button>
+          </nav>
+        </DialogContent>
+      </Dialog>
     </main>
   );
 }

@@ -17,6 +17,20 @@ def test_overview() -> None:
     assert len(response.json()["metrics"]) == 4
 
 
+def test_overview_accepts_naive_datetime() -> None:
+    response = client.get("/api/v1/dashboard/overview?start=2026-01-01T00:00:00")
+    assert response.status_code == 200
+
+
+def test_overview_rejects_reversed_window() -> None:
+    response = client.get(
+        "/api/v1/dashboard/overview"
+        "?start=2026-02-01T00:00:00Z&end=2026-01-01T00:00:00Z"
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"] == "start must be before end"
+
+
 def test_findings_filter() -> None:
     response = client.get("/api/v1/findings?severity=critical")
     assert response.status_code == 200

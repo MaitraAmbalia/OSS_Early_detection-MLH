@@ -43,8 +43,12 @@ export type RepositoryAnalysis = {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, { ...init, cache: "no-store" });
   if (!response.ok) {
-    const payload = await response.json().catch(() => ({}));
-    throw new Error(payload.detail ?? `Request failed (${response.status})`);
+    const payload: unknown = await response.json().catch(() => null);
+    const detail =
+      payload && typeof payload === "object" && "detail" in payload
+        ? (payload as { detail?: unknown }).detail
+        : null;
+    throw new Error(typeof detail === "string" ? detail : `Request failed (${response.status})`);
   }
   return response.json() as Promise<T>;
 }

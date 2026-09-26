@@ -16,8 +16,13 @@ FindingsLimit = Annotated[int, Query(ge=1, le=200)]
 
 
 def date_window(start: datetime | None, end: datetime | None) -> tuple[datetime, datetime]:
-    window_end = end or datetime.now(UTC)
-    window_start = start or window_end - timedelta(days=30)
+    def as_utc(value: datetime) -> datetime:
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+
+    window_end = as_utc(end) if end else datetime.now(UTC)
+    window_start = as_utc(start) if start else window_end - timedelta(days=30)
     if window_start >= window_end:
         raise HTTPException(status_code=422, detail="start must be before end")
     return window_start, window_end
