@@ -1,6 +1,12 @@
+import base64
+import json
+import re
+import tomllib
 from typing import Any
+from urllib.parse import quote
 
 import httpx
+from packaging.requirements import InvalidRequirement, Requirement
 
 from app.config import Settings
 from app.models import GitHubIdentity, SbomPackage
@@ -90,6 +96,117 @@ class GitHubClient:
             for package in packages
             if package.get("name")
         ]
+
+    async def manifest_dependencies(
+        self, owner: str, repo: str, ref: str
+    ) -> list[SbomPackage]:
+        encoded_ref = quote(ref, safe="")
+        tree, _ = await self._get(
+            f"/repos/{owner}/{repo}/git/trees/{encoded_ref}", params={"recursive": "1"}
+        )
+        if not isinstance(tree, dict) or tree.get("truncated"):
+            raise GitHubApiError(422, "GitHub could not return a complete repository tree")
+
+        manifest_paths = [
+            item["path"]
+            for item in tree.get("tree", [])
+            if isinstance(item, dict)
+            and item.get("type") == "blob"
+            and self._supported_manifest(str(item.get("path", "")))
+        ]
+        packages: list[SbomPackage] = []
+        for path in manifest_paths[:30]:
+            encoded_path = quote(path, safe="/")
+            payload, _ = await self._get(
+                f"/repos/{owner}/{repo}/contents/{encoded_path}", params={"ref": ref}
+            )
+            if not isinstance(payload, dict) or payload.get("encoding") != "base64":
+                continue
+            try:
+                content = base64.b64decode(payload.get("content", "")).decode("utf-8")
+            except (ValueError, UnicodeDecodeError):
+                continue
+            packages.extend(self._parse_manifest(path, content))
+
+        unique: dict[tuple[str, str | None], SbomPackage] = {}
+        for package in packages:
+            unique[(package.purl or package.name, package.version)] = package
+        return sorted(unique.values(), key=lambda item: item.name.lower())
+
+    @staticmethod
+    def _supported_manifest(path: str) -> bool:
+        name = path.rsplit("/", 1)[-1].lower()
+        return name in {"package-lock.json", "npm-shrinkwrap.json", "pyproject.toml"} or (
+            name.startswith("requirements") and name.endswith(".txt")
+        )
+
+    @classmethod
+    def _parse_manifest(cls, path: str, content: str) -> list[SbomPackage]:
+        name = path.rsplit("/", 1)[-1].lower()
+        try:
+            if name in {"package-lock.json", "npm-shrinkwrap.json"}:
+                return cls._parse_npm_lock(path, json.loads(content))
+            if name == "pyproject.toml":
+                dependencies = tomllib.loads(content).get("project", {}).get("dependencies", [])
+                return cls._python_packages(path, dependencies)
+            if name.startswith("requirements") and name.endswith(".txt"):
+                dependencies = [
+                    line.strip()
+                    for line in content.splitlines()
+                    if line.strip() and not line.lstrip().startswith(("#", "-"))
+                ]
+                return cls._python_packages(path, dependencies)
+        except (json.JSONDecodeError, tomllib.TOMLDecodeError, TypeError):
+            return []
+        return []
+
+    @staticmethod
+    def _parse_npm_lock(path: str, document: dict[str, Any]) -> list[SbomPackage]:
+        packages: list[SbomPackage] = []
+        lock_packages = document.get("packages")
+        if isinstance(lock_packages, dict):
+            for location, item in lock_packages.items():
+                if not location or not isinstance(item, dict) or "node_modules/" not in location:
+                    continue
+                name = location.rsplit("node_modules/", 1)[-1]
+                version = str(item["version"]) if item.get("version") is not None else None
+                purl_name = quote(name, safe="/")
+                purl = f"pkg:npm/{purl_name}@{version}" if version else f"pkg:npm/{purl_name}"
+                packages.append(
+                    SbomPackage(
+                        name=name,
+                        version=version,
+                        purl=purl,
+                        spdx_id=f"manifest:{path}:{name}",
+                    )
+                )
+        return packages
+
+    @staticmethod
+    def _python_packages(path: str, dependencies: list[object]) -> list[SbomPackage]:
+        packages: list[SbomPackage] = []
+        for value in dependencies:
+            try:
+                requirement = Requirement(str(value))
+            except InvalidRequirement:
+                continue
+            exact_versions = [
+                specifier.version
+                for specifier in requirement.specifier
+                if specifier.operator in {"==", "==="} and "*" not in specifier.version
+            ]
+            version = exact_versions[0] if len(exact_versions) == 1 else None
+            normalized = re.sub(r"[-_.]+", "-", requirement.name).lower()
+            purl = f"pkg:pypi/{normalized}@{version}" if version else f"pkg:pypi/{normalized}"
+            packages.append(
+                SbomPackage(
+                    name=requirement.name,
+                    version=version,
+                    purl=purl,
+                    spdx_id=f"manifest:{path}:{requirement.name}",
+                )
+            )
+        return packages
 
     async def dependabot_alerts(
         self, owner: str, repo: str, *, max_pages: int = 10

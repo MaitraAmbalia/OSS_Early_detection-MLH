@@ -122,6 +122,9 @@ class RepositoryAnalysis(BaseModel):
     dependency_count: int
     ecosystems: list[str]
     packages: list[SbomPackage]
+    dependency_status: Literal["available", "unavailable"]
+    dependency_source: Literal["github_sbom", "github_manifests", "unavailable"]
+    dependency_message: str | None = None
     risk: RepositoryRisk
     vulnerability_status: Literal["available", "unavailable"]
     vulnerability_message: str | None = None

@@ -22,6 +22,9 @@ export type RepositoryAnalysis = {
   dependency_count: number;
   ecosystems: string[];
   packages: { name: string; version: string | null; purl: string | null }[];
+  dependency_status: "available" | "unavailable";
+  dependency_source: "github_sbom" | "github_manifests" | "unavailable";
+  dependency_message: string | null;
   vulnerability_status: "available" | "unavailable";
   vulnerability_message: string | null;
   risk: {

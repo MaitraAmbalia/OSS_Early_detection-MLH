@@ -206,11 +206,12 @@ export default function Home() {
 
           {analysis && (
             <>
+              {analysis.dependency_message && <div className={`flex gap-3 rounded-xl border p-4 text-sm ${analysis.dependency_status === "available" ? "border-blue-300/20 bg-blue-300/[0.07] text-blue-100" : "border-amber-300/20 bg-amber-300/[0.07] text-amber-100"}`}><Boxes className="mt-0.5 h-5 w-5 shrink-0" /><div><p className="font-medium">{analysis.dependency_source === "github_manifests" ? "Using committed manifests" : "Dependency inventory unavailable"}</p><p className="mt-1 opacity-70">{analysis.dependency_message}</p></div></div>}
               {analysis.vulnerability_status === "unavailable" && <div className="flex gap-3 rounded-xl border border-amber-300/20 bg-amber-300/[0.07] p-4 text-sm text-amber-100"><AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" /><div><p className="font-medium">Vulnerability access unavailable</p><p className="mt-1 text-amber-100/70">{analysis.vulnerability_message}</p></div></div>}
 
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                 {[
-                  ["Dependencies", analysis.dependency_count, Boxes, "Detected by GitHub SBOM"],
+                  ["Dependencies", analysis.dependency_count, Boxes, analysis.dependency_source === "github_sbom" ? "Detected by GitHub SBOM" : analysis.dependency_source === "github_manifests" ? "Read from GitHub manifests" : "Inventory unavailable"],
                   ["Open alerts", exposures.length, ShieldAlert, analysis.vulnerability_status === "available" ? "GitHub Dependabot" : "Permission required"],
                   ["Critical", criticalCount, AlertTriangle, "Immediate attention"],
                   ["High", highCount, ShieldCheck, `Risk ${Math.round(analysis.risk.composite_score)}/100`],

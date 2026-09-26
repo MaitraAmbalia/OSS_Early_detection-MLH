@@ -9,6 +9,7 @@ from app.domain.detection import (
     suspicious_commit_messages,
 )
 from app.routers.github import github_risk
+from app.services.github import GitHubClient
 
 
 def event(
@@ -100,3 +101,20 @@ def test_github_risk_uses_real_dependabot_severity() -> None:
     assert risk.composite_score == 95
     assert risk.risk_level == "critical"
     assert risk.dependency_exposures[0].advisory_id == "GHSA-test"
+
+
+def test_manifest_fallback_parses_npm_lock_and_python_dependencies() -> None:
+    npm_packages = GitHubClient._parse_manifest(
+        "package-lock.json",
+        '{"packages":{"":{"name":"app"},"node_modules/react":{"version":"19.2.6"}}}',
+    )
+    python_packages = GitHubClient._parse_manifest(
+        "backend/pyproject.toml",
+        '[project]\ndependencies = ["fastapi>=0.115,<1", "httpx==0.28.1"]\n',
+    )
+
+    assert [(item.name, item.version) for item in npm_packages] == [("react", "19.2.6")]
+    assert [(item.name, item.version) for item in python_packages] == [
+        ("fastapi", None),
+        ("httpx", "0.28.1"),
+    ]

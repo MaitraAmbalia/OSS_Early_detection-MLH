@@ -10,7 +10,9 @@ The current version performs on-demand snapshots when a user selects or rescans 
 
 1. The backend validates the credential with GitHub.
 2. GitHub returns repositories that the authenticated user can access.
-3. The selected repository's Dependency Graph is exported as an SPDX SBOM.
+3. The selected repository's Dependency Graph is exported as an SPDX SBOM. If the SBOM is
+   unavailable, Sentinel reads supported committed lockfiles and manifests through GitHub's
+   Contents API and labels the fallback in the dashboard.
 4. Open Dependabot alerts provide affected packages, severity, vulnerable ranges, and GHSA identifiers.
 5. Sentinel assigns a transparent display score based on the highest open alert severity. It does not claim that this score is a statistical probability.
 

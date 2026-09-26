@@ -144,9 +144,36 @@ async def analyze_repository(
     client = GitHubClient(settings, credential)
     try:
         repository = await client.repository(owner, repo)
-        packages = await client.sbom(owner, repo)
     except GitHubApiError as error:
         raise HTTPException(status_code=error.status_code, detail=error.message) from error
+
+    dependency_status = "available"
+    dependency_source = "github_sbom"
+    dependency_message = None
+    try:
+        packages = await client.sbom(owner, repo)
+    except GitHubApiError as error:
+        if error.status_code not in {403, 404}:
+            raise HTTPException(status_code=error.status_code, detail=error.message) from error
+        try:
+            packages = await client.manifest_dependencies(
+                owner, repo, repository.get("default_branch") or "main"
+            )
+        except GitHubApiError:
+            packages = []
+        if packages:
+            dependency_source = "github_manifests"
+            dependency_message = (
+                "GitHub's SBOM is unavailable for this repository. Dependencies were read "
+                "directly from committed lockfiles and manifests through the GitHub API."
+            )
+        else:
+            dependency_status = "unavailable"
+            dependency_source = "unavailable"
+            dependency_message = (
+                "GitHub's SBOM is unavailable and no supported committed dependency "
+                "manifest could be read. Enable the repository Dependency Graph."
+            )
 
     end = datetime.now(UTC)
     start = end - timedelta(days=30)
@@ -179,6 +206,9 @@ async def analyze_repository(
         dependency_count=len(packages),
         ecosystems=ecosystems,
         packages=packages[:250],
+        dependency_status=dependency_status,
+        dependency_source=dependency_source,
+        dependency_message=dependency_message,
         risk=risk,
         vulnerability_status=vulnerability_status,
         vulnerability_message=vulnerability_message,
