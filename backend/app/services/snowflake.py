@@ -1,15 +1,25 @@
 import json
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import snowflake.connector
 from cryptography.hazmat.primitives import serialization
+from snowflake.connector.errors import ProgrammingError
 
 from app.config import Settings
 from app.domain.versions import canonical_ecosystem, normalize_package_name, version_is_affected
-from app.models import DashboardOverview, FindingsPage, RepositoryRisk, SbomPackage
+from app.models import (
+    DashboardOverview,
+    FindingsPage,
+    Metric,
+    PipelineSource,
+    RepositoryRisk,
+    SbomPackage,
+    SignalShare,
+    TrendPoint,
+)
 
 
 class SnowflakeRepository:
@@ -56,6 +66,18 @@ class SnowflakeRepository:
             return json.loads(value)
         raise ValueError("Snowflake procedure returned an unsupported payload")
 
+    @staticmethod
+    def _decode_timestamp(value: object) -> datetime:
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().replace("Z", "+00:00")
+            date_time, separator, offset = normalized.rpartition(" ")
+            if separator and offset[:1] in {"+", "-"}:
+                normalized = date_time.replace(" ", "T", 1) + offset
+            return datetime.fromisoformat(normalized)
+        return datetime.now(UTC)
+
     def repository_risk(self, repo: str, start: datetime, end: datetime) -> RepositoryRisk:
         sql = "CALL CHECK_REPO_RISK(%s, %s, %s)"
         with self.connection() as connection, connection.cursor() as cursor:
@@ -63,17 +85,120 @@ class SnowflakeRepository:
             row = cursor.fetchone()
         if not row:
             raise LookupError(f"No risk result found for {repo}")
-        return RepositoryRisk.model_validate(self._decode_variant(row[0]))
+        payload = self._decode_variant(row[0])
+        if not payload:
+            raise LookupError(f"No risk result found for {repo}")
+
+        # Normalize both the current API contract and the historical procedure
+        # contract already deployed in the hackathon Snowflake account.
+        metadata = payload.get("metadata") or {}
+        blast_radius = payload.get("blast_radius") or {}
+        if isinstance(blast_radius, dict):
+            blast_radius = blast_radius.get("repos_touched_by_actor") or []
+        payload["risk_level"] = str(payload.get("risk_level", "low")).lower()
+        payload["window_start"] = payload.get("window_start") or start
+        payload["window_end"] = payload.get("window_end") or end
+        payload["computed_at"] = self._decode_timestamp(
+            payload.get("computed_at") or metadata.get("computed_at")
+        )
+        payload["data_sources"] = payload.get("data_sources") or ["gharchive_hourly"]
+        payload["blast_radius_repos"] = payload.get("blast_radius_repos") or blast_radius
+        payload["dependency_exposures"] = payload.get("dependency_exposures") or []
+        return RepositoryRisk.model_validate(payload)
 
     def overview(self, start: datetime, end: datetime) -> DashboardOverview:
-        # CoCo will expose this procedure/view contract during integration.
-        sql = "CALL GET_DASHBOARD_OVERVIEW(%s, %s)"
+        metrics_sql = """
+            SELECT COUNT_IF(UPPER(RISK_LEVEL) = 'CRITICAL'),
+                   COUNT(DISTINCT REPO_NAME), COUNT(DISTINCT ACTOR_LOGIN)
+            FROM RISK_SCORES
+            WHERE COMPUTED_AT BETWEEN %s AND %s
+        """
+        trend_sql = """
+            SELECT DATE_TRUNC('hour', COMPUTED_AT), LEAST(100, MAX(COMPOSITE_SCORE))
+            FROM RISK_SCORES
+            WHERE COMPUTED_AT BETWEEN %s AND %s
+            GROUP BY 1 ORDER BY 1
+        """
+        signals_sql = """
+            SELECT f.value::STRING, COUNT(*)
+            FROM RISK_SCORES r, LATERAL FLATTEN(INPUT => r.SIGNALS_FIRED) f
+            WHERE r.COMPUTED_AT BETWEEN %s AND %s
+            GROUP BY 1 ORDER BY 2 DESC
+        """
+        exposure_sql = """
+            SELECT COUNT(*) FROM REPOSITORY_DEPENDENCY_EXPOSURES
+            WHERE LOWER(MATCH_STATUS) = 'confirmed_vulnerable'
+        """
+        pipeline_sql = """
+            SELECT SOURCE_KEY, MAX(COMPLETED_AT)
+            FROM INGESTION_CHECKPOINTS
+            WHERE STATUS = 'completed'
+            GROUP BY SOURCE_KEY
+        """
         with self.connection() as connection, connection.cursor() as cursor:
-            cursor.execute(sql, (start.isoformat(), end.isoformat()))
-            row = cursor.fetchone()
-        if not row:
-            raise LookupError("Dashboard overview is empty")
-        return DashboardOverview.model_validate(self._decode_variant(row[0]))
+            critical, repositories, actors = cursor.execute(
+                metrics_sql, (start, end)
+            ).fetchone()
+            trend_rows = cursor.execute(trend_sql, (start, end)).fetchall()
+            signal_rows = cursor.execute(signals_sql, (start, end)).fetchall()
+            exposed = cursor.execute(exposure_sql).fetchone()[0]
+            try:
+                checkpoint_rows = cursor.execute(pipeline_sql).fetchall()
+            except ProgrammingError:
+                # Historical deployments predate the checkpoint table. The
+                # analytics remain usable while pipeline status stays unknown.
+                checkpoint_rows = []
+
+        signal_total = sum(int(row[1]) for row in signal_rows)
+        checkpoints: dict[str, datetime] = {}
+        for source_key, completed_at in checkpoint_rows:
+            source = str(source_key).split(":", 1)[0]
+            if source not in checkpoints or completed_at > checkpoints[source]:
+                checkpoints[source] = completed_at
+
+        now = datetime.now(UTC)
+        pipeline_specs = (
+            ("gharchive", "hourly"),
+            ("github_advisories", "daily"),
+            ("osv_queries", "daily"),
+        )
+        pipeline = []
+        for source, cadence in pipeline_specs:
+            last_success = checkpoints.get(source)
+            max_age = 3 * 3600 if cadence == "hourly" else 36 * 3600
+            if last_success is None:
+                status = "unknown"
+            else:
+                if last_success.tzinfo is None:
+                    last_success = last_success.replace(tzinfo=UTC)
+                status = "healthy" if (now - last_success).total_seconds() <= max_age else "delayed"
+            pipeline.append(
+                PipelineSource(
+                    source="osv" if source == "osv_queries" else source,
+                    last_success_at=last_success,
+                    cadence=cadence,
+                    status=status,
+                )
+            )
+
+        return DashboardOverview(
+            metrics=[
+                Metric(label="Critical findings", value=int(critical or 0), note="selected window"),
+                Metric(label="Repos monitored", value=int(repositories or 0), note="selected window"),
+                Metric(label="Exposed packages", value=int(exposed or 0), note="confirmed"),
+                Metric(label="Active actors", value=int(actors or 0), note="flagged"),
+            ],
+            trend=[TrendPoint(timestamp=row[0], score=float(row[1])) for row in trend_rows],
+            signal_distribution=[
+                SignalShare(
+                    signal=str(row[0]),
+                    percentage=round(100 * int(row[1]) / signal_total, 1),
+                )
+                for row in signal_rows
+            ] if signal_total else [],
+            pipeline=pipeline,
+            generated_at=now,
+        )
 
     def findings(self, level: str | None, limit: int) -> FindingsPage:
         where = "WHERE RISK_LEVEL = %s" if level else ""
@@ -81,10 +206,10 @@ class SnowflakeRepository:
         sql = f"""
             SELECT RISK_ID, REPO_NAME, ACTOR_LOGIN, COMPOSITE_SCORE, LOWER(RISK_LEVEL),
                    SIGNALS_FIRED[0]::STRING, AI_EXPLANATION, SIGNALS_FIRED,
-                   LATEST_ACTIVITY, DATA_SOURCES
+                   COMPUTED_AT, DATA_SOURCES
             FROM RISK_SCORES
             {where}
-            ORDER BY COMPOSITE_SCORE DESC, LATEST_ACTIVITY DESC
+            ORDER BY COMPOSITE_SCORE DESC, COMPUTED_AT DESC
             LIMIT %s
         """
         items: list[dict[str, Any]] = []
