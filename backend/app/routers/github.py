@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException
+from starlette.concurrency import run_in_threadpool
 
 from app.config import Settings
 from app.dependencies import settings_dependency
@@ -25,6 +26,7 @@ from app.models import (
     RepositoryRisk,
 )
 from app.services.github import GitHubApiError, GitHubClient
+from app.services.snowflake import SnowflakeRepository
 
 router = APIRouter(prefix="/api/v1", tags=["github"])
 SettingsDep = Annotated[Settings, Depends(settings_dependency)]
@@ -265,7 +267,32 @@ async def contributor_trust(
         events = await client.repository_events(owner, repo)
     except GitHubApiError as error:
         raise HTTPException(status_code=error.status_code, detail=error.message) from error
-    return github_contributor_trust(f"{owner}/{repo}", contributors, events)
+    result = github_contributor_trust(f"{owner}/{repo}", contributors, events)
+    if not settings.snowflake_persistence_enabled:
+        return result
+    try:
+        await run_in_threadpool(
+            SnowflakeRepository(settings).persist_contributor_snapshot,
+            result.repository,
+            events,
+            result,
+        )
+    except Exception:  # noqa: BLE001 - warehouse failures must not hide live GitHub results
+        return result.model_copy(
+            update={
+                "warehouse_status": "failed",
+                "warehouse_message": (
+                    "GitHub scoring succeeded, but the Snowflake write failed. "
+                    "Check warehouse configuration and run sql/004_github_warehouse.sql."
+                ),
+            }
+        )
+    return result.model_copy(
+        update={
+            "warehouse_status": "stored",
+            "warehouse_message": "Contributor events and scores were stored in Snowflake",
+        }
+    )
 
 
 @router.post("/repositories/{owner}/{repo}/analyze", response_model=RepositoryAnalysis)
@@ -336,7 +363,7 @@ async def analyze_repository(
             if package.purl and ":" in package.purl
         }
     )
-    return RepositoryAnalysis(
+    result = RepositoryAnalysis(
         repository=repository["full_name"],
         default_branch=repository["default_branch"],
         visibility=repository.get("visibility", "public"),
@@ -349,4 +376,30 @@ async def analyze_repository(
         risk=risk,
         vulnerability_status=vulnerability_status,
         vulnerability_message=vulnerability_message,
+    )
+    if not settings.snowflake_persistence_enabled:
+        return result
+    try:
+        await run_in_threadpool(
+            SnowflakeRepository(settings).persist_repository_snapshot,
+            repository,
+            result,
+            packages,
+            alerts,
+        )
+    except Exception:  # noqa: BLE001 - warehouse failures must not hide live GitHub results
+        return result.model_copy(
+            update={
+                "warehouse_status": "failed",
+                "warehouse_message": (
+                    "GitHub scan succeeded, but the Snowflake write failed. "
+                    "Check warehouse configuration and run sql/004_github_warehouse.sql."
+                ),
+            }
+        )
+    return result.model_copy(
+        update={
+            "warehouse_status": "stored",
+            "warehouse_message": "Scan, dependencies, and alerts were stored in Snowflake",
+        }
     )

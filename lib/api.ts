@@ -27,6 +27,8 @@ export type RepositoryAnalysis = {
   dependency_message: string | null;
   vulnerability_status: "available" | "unavailable";
   vulnerability_message: string | null;
+  warehouse_status: "disabled" | "stored" | "failed";
+  warehouse_message: string;
   risk: {
     composite_score: number;
     risk_level: "critical" | "high" | "medium" | "low";
@@ -68,6 +70,15 @@ export type ContributorTrustPage = {
   window_days: number;
   computed_at: string;
   coverage_message: string;
+  warehouse_status: "disabled" | "stored" | "failed";
+  warehouse_message: string;
+};
+
+export type WarehouseHealth = {
+  status: "disabled" | "ready" | "failed";
+  configured: boolean;
+  persistence_enabled: boolean;
+  message: string;
 };
 
 function githubHeaders(token: string): HeadersInit {
@@ -107,4 +118,5 @@ export const api = {
       `/api/v1/repositories/${repository}/contributors/trust`,
       { headers: githubHeaders(token) },
     ),
+  warehouseStatus: () => request<WarehouseHealth>("/api/v1/warehouse/status"),
 };

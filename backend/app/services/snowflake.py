@@ -1,8 +1,9 @@
 import json
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
+from uuid import uuid4
 
 import snowflake.connector
 from cryptography.hazmat.primitives import serialization
@@ -11,10 +12,12 @@ from snowflake.connector.errors import ProgrammingError
 from app.config import Settings
 from app.domain.versions import canonical_ecosystem, normalize_package_name, version_is_affected
 from app.models import (
+    ContributorTrustPage,
     DashboardOverview,
     FindingsPage,
     Metric,
     PipelineSource,
+    RepositoryAnalysis,
     RepositoryRisk,
     SbomPackage,
     SignalShare,
@@ -57,6 +60,15 @@ class SnowflakeRepository:
             yield connection
         finally:
             connection.close()
+
+    def healthcheck(self) -> None:
+        with self.connection() as connection, connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+            cursor.fetchone()
+
+    @staticmethod
+    def _json(value: object) -> str:
+        return json.dumps(value, default=str)
 
     @staticmethod
     def _decode_variant(value: object) -> dict[str, Any]:
@@ -565,3 +577,226 @@ class SnowflakeRepository:
                 )
             connection.commit()
         return len(rows)
+
+    def persist_repository_snapshot(
+        self,
+        repository: dict[str, Any],
+        analysis: RepositoryAnalysis,
+        packages: list[SbomPackage],
+        alerts: list[dict[str, Any]],
+    ) -> str:
+        scan_id = str(uuid4())
+        repo_name = analysis.repository
+        repository_sql = """
+            MERGE INTO GITHUB_REPOSITORIES target
+            USING (SELECT %s REPO_NAME, %s DEFAULT_BRANCH, %s VISIBILITY,
+                          PARSE_JSON(%s) RAW) source
+              ON target.REPO_NAME=source.REPO_NAME
+            WHEN MATCHED THEN UPDATE SET DEFAULT_BRANCH=source.DEFAULT_BRANCH,
+                 VISIBILITY=source.VISIBILITY, RAW=source.RAW,
+                 LAST_SEEN_AT=CURRENT_TIMESTAMP()
+            WHEN NOT MATCHED THEN INSERT
+                 (REPO_NAME, DEFAULT_BRANCH, VISIBILITY, RAW, FIRST_SEEN_AT, LAST_SEEN_AT)
+                 VALUES (source.REPO_NAME, source.DEFAULT_BRANCH, source.VISIBILITY,
+                         source.RAW, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())
+        """
+        scan_sql = """
+            INSERT INTO GITHUB_SCAN_RUNS (
+              SCAN_ID, REPO_NAME, DEPENDENCY_SOURCE, DEPENDENCY_COUNT,
+              VULNERABILITY_STATUS, OPEN_ALERT_COUNT, REPOSITORY_RISK_SCORE, RAW
+            ) SELECT %s,%s,%s,%s,%s,%s,%s,PARSE_JSON(%s)
+        """
+        dependency_sql = """
+            INSERT INTO GITHUB_DEPENDENCY_SNAPSHOTS (
+              SCAN_ID, REPO_NAME, PACKAGE_NAME, RESOLVED_VERSION, PURL, SPDX_ID
+            ) VALUES (%s,%s,%s,%s,%s,%s)
+        """
+        alert_sql = """
+            INSERT INTO GITHUB_ALERT_SNAPSHOTS (
+              SCAN_ID, REPO_NAME, ALERT_NUMBER, GHSA_ID, CLASSIFICATION,
+              SEVERITY, PACKAGE_NAME, STATE, RAW
+            ) SELECT %s,%s,%s,%s,%s,%s,%s,%s,PARSE_JSON(%s)
+        """
+        with self.connection() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                repository_sql,
+                (
+                    repo_name,
+                    analysis.default_branch,
+                    analysis.visibility,
+                    self._json(repository),
+                ),
+            )
+            cursor.execute(
+                scan_sql,
+                (
+                    scan_id,
+                    repo_name,
+                    analysis.dependency_source,
+                    analysis.dependency_count,
+                    analysis.vulnerability_status,
+                    len(alerts),
+                    analysis.risk.composite_score,
+                    self._json(analysis.model_dump(mode="json")),
+                ),
+            )
+            if packages:
+                cursor.executemany(
+                    dependency_sql,
+                    [
+                        (scan_id, repo_name, item.name, item.version, item.purl, item.spdx_id)
+                        for item in packages
+                    ],
+                )
+            for alert in alerts:
+                advisory = alert.get("security_advisory") or {}
+                dependency = alert.get("dependency") or {}
+                package = dependency.get("package") if isinstance(dependency, dict) else {}
+                if not isinstance(advisory, dict):
+                    advisory = {}
+                if not isinstance(package, dict):
+                    package = {}
+                cursor.execute(
+                    alert_sql,
+                    (
+                        scan_id,
+                        repo_name,
+                        alert.get("number"),
+                        advisory.get("ghsa_id"),
+                        advisory.get("classification") or "general",
+                        advisory.get("severity"),
+                        package.get("name"),
+                        alert.get("state"),
+                        self._json(alert),
+                    ),
+                )
+            connection.commit()
+        return scan_id
+
+    @staticmethod
+    def _event_row(
+        repo_name: str,
+        event: dict[str, Any],
+        source: str,
+    ) -> tuple[object, ...] | None:
+        actor = event.get("actor") or event.get("sender") or {}
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else event
+        member = payload.get("member") or {}
+        created_at = (
+            event.get("created_at")
+            or (payload.get("head_commit") or {}).get("timestamp")
+            or datetime.now(UTC)
+        )
+        event_id = event.get("id") or event.get("delivery_id")
+        event_type = event.get("type") or event.get("event_type")
+        if not event_id or not event_type:
+            return None
+        return (
+            str(event_id),
+            repo_name,
+            str(event_type),
+            actor.get("login") if isinstance(actor, dict) else None,
+            payload.get("action"),
+            member.get("login") if isinstance(member, dict) else None,
+            created_at,
+            source,
+            SnowflakeRepository._json(payload),
+        )
+
+    @staticmethod
+    def _merge_events(cursor: Any, rows: list[tuple[object, ...]]) -> None:
+        sql = """
+            MERGE INTO GITHUB_REPOSITORY_EVENTS target
+            USING (SELECT %s EVENT_ID,%s REPO_NAME,%s EVENT_TYPE,%s ACTOR_LOGIN,
+                          %s ACTION,%s MEMBER_LOGIN,%s EVENT_CREATED_AT,%s SOURCE,
+                          PARSE_JSON(%s) PAYLOAD) source
+              ON target.EVENT_ID=source.EVENT_ID AND target.REPO_NAME=source.REPO_NAME
+            WHEN MATCHED THEN UPDATE SET PAYLOAD=source.PAYLOAD,
+                 INGESTED_AT=CURRENT_TIMESTAMP()
+            WHEN NOT MATCHED THEN INSERT
+                 (EVENT_ID,REPO_NAME,EVENT_TYPE,ACTOR_LOGIN,ACTION,MEMBER_LOGIN,
+                  EVENT_CREATED_AT,SOURCE,PAYLOAD)
+                 VALUES (source.EVENT_ID,source.REPO_NAME,source.EVENT_TYPE,
+                         source.ACTOR_LOGIN,source.ACTION,source.MEMBER_LOGIN,
+                         source.EVENT_CREATED_AT,source.SOURCE,source.PAYLOAD)
+        """
+        for row in rows:
+            cursor.execute(sql, row)
+
+    def persist_contributor_snapshot(
+        self,
+        repo_name: str,
+        events: list[dict[str, Any]],
+        page: ContributorTrustPage,
+    ) -> str:
+        score_id = str(uuid4())
+        rows = [
+            row
+            for event in events
+            if (row := self._event_row(repo_name, event, "github_repository_events"))
+        ]
+        score_sql = """
+            INSERT INTO GITHUB_CONTRIBUTOR_TRUST_SNAPSHOTS (
+              SCORE_ID,REPO_NAME,ACTOR_LOGIN,CONTRIBUTIONS,OBSERVED_EVENTS,
+              RISK_SCORE,TRUST_SCORE,RISK_LEVEL,SIGNALS,WINDOW_START,WINDOW_END,SOURCE
+            ) SELECT %s,%s,%s,%s,%s,%s,%s,%s,PARSE_JSON(%s),%s,%s,%s
+        """
+        with self.connection() as connection, connection.cursor() as cursor:
+            self._merge_events(cursor, rows)
+            for item in page.items:
+                cursor.execute(
+                    score_sql,
+                    (
+                        score_id,
+                        repo_name,
+                        item.login,
+                        item.contributions,
+                        item.observed_events,
+                        item.risk_score,
+                        item.trust_score,
+                        item.risk_level,
+                        self._json([signal.model_dump(mode="json") for signal in item.signals]),
+                        page.computed_at - timedelta(days=page.window_days),
+                        page.computed_at,
+                        page.source,
+                    ),
+                )
+            connection.commit()
+        return score_id
+
+    def persist_webhook_delivery(
+        self,
+        delivery_id: str,
+        event_type: str,
+        payload: dict[str, Any],
+    ) -> None:
+        repository = payload.get("repository") or {}
+        repo_name = str(repository.get("full_name") or "")
+        delivery_sql = """
+            MERGE INTO GITHUB_WEBHOOK_DELIVERIES target
+            USING (SELECT %s DELIVERY_ID,%s EVENT_TYPE,%s REPO_NAME,
+                          PARSE_JSON(%s) PAYLOAD) source
+              ON target.DELIVERY_ID=source.DELIVERY_ID
+            WHEN NOT MATCHED THEN INSERT (DELIVERY_ID,EVENT_TYPE,REPO_NAME,PAYLOAD)
+                 VALUES (source.DELIVERY_ID,source.EVENT_TYPE,source.REPO_NAME,source.PAYLOAD)
+        """
+        github_type = {
+            "push": "PushEvent",
+            "member": "MemberEvent",
+        }.get(event_type, event_type)
+        event = {
+            "delivery_id": delivery_id,
+            "event_type": github_type,
+            "sender": payload.get("sender") or {},
+            **payload,
+        }
+        row = self._event_row(repo_name, event, "github_webhook") if repo_name else None
+        with self.connection() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                delivery_sql,
+                (delivery_id, event_type, repo_name or None, self._json(payload)),
+            )
+            if row:
+                self._merge_events(cursor, [row])
+                cursor.execute("CALL REFRESH_GITHUB_CONTRIBUTOR_TRUST()")
+            connection.commit()

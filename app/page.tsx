@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   Boxes,
   CheckCircle2,
+  Database,
   ExternalLink,
   GitBranch,
   KeyRound,
@@ -234,6 +235,8 @@ export default function Home() {
               {analysis.dependency_message && <div className={`flex gap-3 rounded-xl border p-4 text-sm ${analysis.dependency_status === "available" ? "border-blue-300/20 bg-blue-300/[0.07] text-blue-100" : "border-amber-300/20 bg-amber-300/[0.07] text-amber-100"}`}><Boxes className="mt-0.5 h-5 w-5 shrink-0" /><div><p className="font-medium">{analysis.dependency_source === "github_manifests" ? "Using committed manifests" : "Dependency inventory unavailable"}</p><p className="mt-1 opacity-70">{analysis.dependency_message}</p></div></div>}
               {analysis.vulnerability_status === "unavailable" && <div className="flex gap-3 rounded-xl border border-amber-300/20 bg-amber-300/[0.07] p-4 text-sm text-amber-100"><AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" /><div><p className="font-medium">Vulnerability access unavailable</p><p className="mt-1 text-amber-100/70">{analysis.vulnerability_message}</p></div></div>}
 
+              <div className={`flex gap-3 rounded-xl border p-4 text-sm ${analysis.warehouse_status === "stored" ? "border-emerald-300/20 bg-emerald-300/[0.07] text-emerald-100" : analysis.warehouse_status === "failed" ? "border-amber-300/20 bg-amber-300/[0.07] text-amber-100" : "border-white/[0.07] bg-card/60 text-muted-foreground"}`}><Database className="mt-0.5 h-5 w-5 shrink-0" /><div><p className="font-medium">{analysis.warehouse_status === "stored" ? "Stored in Snowflake" : analysis.warehouse_status === "failed" ? "Snowflake write failed" : "Live scan only"}</p><p className="mt-1 opacity-75">{analysis.warehouse_message}</p></div></div>
+
               <section className="flex flex-col gap-4 rounded-xl border border-white/[0.07] bg-card/80 p-5 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <p className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">Current repository risk score</p>
@@ -282,7 +285,7 @@ export default function Home() {
                     </table>
                   </div>
                   {contributorTrust.items.length === 0 && <div className="p-8 text-center text-sm text-muted-foreground">GitHub returned no named contributors for this repository.</div>}
-                  <div className="border-t border-white/[0.06] px-4 py-3 text-xs leading-5 text-muted-foreground"><strong className="font-medium text-foreground/80">Coverage:</strong> {contributorTrust.coverage_message}</div>
+                  <div className="border-t border-white/[0.06] px-4 py-3 text-xs leading-5 text-muted-foreground"><p><strong className="font-medium text-foreground/80">Coverage:</strong> {contributorTrust.coverage_message}</p><p className="mt-1"><strong className="font-medium text-foreground/80">Warehouse:</strong> {contributorTrust.warehouse_message}</p></div>
                 </section>
               )}
 

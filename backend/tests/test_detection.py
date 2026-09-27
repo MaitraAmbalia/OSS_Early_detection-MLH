@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 from datetime import UTC, datetime, timedelta
 
 from app.domain.detection import (
@@ -9,6 +11,7 @@ from app.domain.detection import (
     suspicious_commit_messages,
 )
 from app.routers.github import github_contributor_trust, github_risk
+from app.routers.warehouse import valid_webhook_signature
 from app.services.github import GitHubClient
 
 
@@ -155,3 +158,12 @@ def test_contributor_trust_reuses_behavioral_signal_model() -> None:
     }
     assert bob.trust_score == 100
     assert bob.assessment == "no_signals_observed"
+
+
+def test_github_webhook_signature_verification() -> None:
+    body = b'{"action":"created"}'
+    secret = "test-secret"
+    signature = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+
+    assert valid_webhook_signature(body, signature, secret)
+    assert not valid_webhook_signature(body + b" ", signature, secret)

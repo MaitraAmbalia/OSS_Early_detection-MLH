@@ -45,6 +45,8 @@ __pycache__/
 .env.*
 !.env.example
 *.pem
+*.p8
+*.key
 
 # Logs and OS files
 npm-debug.log*

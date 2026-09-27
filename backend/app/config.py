@@ -21,14 +21,16 @@ class Settings(BaseSettings):
     snowflake_user: str | None = None
     snowflake_private_key_file: str | None = None
     snowflake_private_key_passphrase: str | None = None
-    snowflake_role: str = "DASHBOARD_ROLE"
-    snowflake_warehouse: str = "HACKATHON_WH"
+    snowflake_role: str = "INGESTION_ROLE"
+    snowflake_warehouse: str = "INGEST_WH"
     snowflake_database: str = "SUPPLY_CHAIN_MONITOR"
     snowflake_schema: str = "DETECTION"
+    snowflake_persistence_enabled: bool = False
 
     github_api_url: str = "https://api.github.com"
     github_api_version: str = "2026-03-10"
     github_token: str | None = None
+    github_webhook_secret: str | None = None
     request_timeout_seconds: float = 15.0
 
     @field_validator("cors_origins", mode="before")
@@ -47,6 +49,14 @@ class Settings(BaseSettings):
         missing = [name for name, value in required.items() if not value]
         if missing:
             raise RuntimeError(f"Missing Snowflake configuration: {', '.join(missing)}")
+
+    @property
+    def snowflake_configured(self) -> bool:
+        return bool(
+            self.snowflake_account
+            and self.snowflake_user
+            and self.snowflake_private_key_file
+        )
 
 
 @lru_cache

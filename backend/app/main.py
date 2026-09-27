@@ -4,7 +4,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.routers import dashboard, github, health
+from app.routers import dashboard, github, health, warehouse
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("sentinel-oss-api")
@@ -36,3 +36,4 @@ async def request_logging(request: Request, call_next):
 app.include_router(health.router)
 app.include_router(dashboard.router)
 app.include_router(github.router)
+app.include_router(warehouse.router)

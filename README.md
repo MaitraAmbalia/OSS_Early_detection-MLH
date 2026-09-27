@@ -32,7 +32,9 @@ If Dependency Graph, Dependabot alerts, or the required permission is unavailabl
 - **Frontend:** React 19, TypeScript, Vinext/Vite, Tailwind CSS, and shadcn/ui.
 - **Backend:** Python 3.11+, FastAPI, Pydantic, HTTPX, and Uvicorn.
 - **GitHub:** authenticated repository listing, Dependency Graph/SBOM, and Dependabot alerts.
-- **Optional storage:** Snowflake tables, roles, warehouses, `VARIANT`, `MERGE`, views, and stored procedures remain available for a hosted deployment that needs historical snapshots.
+- **Optional warehouse:** Snowflake stores scan runs, dependency and alert snapshots, normalized
+  GitHub events, contributor scores, and signed webhook deliveries. Idempotent `MERGE` operations,
+  `VARIANT`, clustered event storage, views, and stored procedures support historical scoring.
 
 ## Run locally
 
@@ -107,7 +109,30 @@ For unattended local use, `GITHUB_TOKEN` can instead be set in the ignored `back
 | `DATA_MODE` | `github` | Use `github` for onboarding and live scans; `snowflake` enables stored analytics endpoints. |
 | `CORS_ORIGINS` | `http://localhost:5173` | Comma-separated frontend origins. |
 | `GITHUB_TOKEN` | empty | Optional server-side GitHub credential fallback. |
-| `SNOWFLAKE_*` | placeholders | Optional hosted-storage configuration. |
+| `GITHUB_WEBHOOK_SECRET` | empty | Secret used to validate `X-Hub-Signature-256` webhook signatures. |
+| `SNOWFLAKE_PERSISTENCE_ENABLED` | `false` | Store scans and events in Snowflake when enabled. |
+| `SNOWFLAKE_*` | placeholders | Snowflake account, key-pair, role, warehouse, database, and schema. |
+
+## Enable Snowflake persistence
+
+Persistence is off by default, so local development never pretends data was stored.
+
+1. Run `backend/sql/001_schema.sql`, `002_detection.sql`, `003_access.sql`, and
+   `004_github_warehouse.sql` in order.
+2. Register the matching RSA public key on `INGESTION_SVC` in Snowflake; keep the private `.p8`
+   file outside the repository.
+3. Create an ignored `backend/.env`; set `SNOWFLAKE_PERSISTENCE_ENABLED=true` and the real
+   `SNOWFLAKE_*` key-pair values locally or through deployment secrets.
+4. Restart the backend and confirm `GET /api/v1/warehouse/status` returns `ready`.
+5. For continuous collection, configure a GitHub App or repository webhook to send at least
+   `push` and `member` events to `POST /api/v1/github/webhooks`. Set the same random secret as
+   `GITHUB_WEBHOOK_SECRET` in both GitHub and the backend.
+
+On-demand scans persist complete dependency inventories, alert payloads, repository metadata, and
+contributor snapshots. Webhook delivery IDs and GitHub event IDs are merged idempotently so retries
+do not create duplicate events. Webhook ingestion refreshes the Snowflake contributor scoring
+procedure, including cross-repository burst detection once multiple connected repositories supply
+events.
 
 ## API
 
@@ -116,6 +141,8 @@ For unattended local use, `GITHUB_TOKEN` can instead be set in the ignored `back
 - `GET /api/v1/github/repositories`
 - `POST /api/v1/repositories/{owner}/{repo}/analyze`
 - `GET /api/v1/repositories/{owner}/{repo}/contributors/trust`
+- `GET /api/v1/warehouse/status`
+- `POST /api/v1/github/webhooks`
 
 The GitHub endpoints require `X-GitHub-Token` unless `GITHUB_TOKEN` is configured locally.
 

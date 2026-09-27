@@ -4,6 +4,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 RiskLevel = Literal["critical", "high", "medium", "low"]
+WarehouseState = Literal["disabled", "stored", "failed"]
 
 
 class HealthResponse(BaseModel):
@@ -141,6 +142,15 @@ class ContributorTrustPage(BaseModel):
     window_days: int = 30
     computed_at: datetime
     coverage_message: str
+    warehouse_status: WarehouseState = "disabled"
+    warehouse_message: str = "Snowflake persistence is disabled"
+
+
+class WarehouseHealth(BaseModel):
+    status: Literal["disabled", "ready", "failed"]
+    configured: bool
+    persistence_enabled: bool
+    message: str
 
 
 class SbomPackage(BaseModel):
@@ -163,3 +173,5 @@ class RepositoryAnalysis(BaseModel):
     risk: RepositoryRisk
     vulnerability_status: Literal["available", "unavailable"]
     vulnerability_message: str | None = None
+    warehouse_status: WarehouseState = "disabled"
+    warehouse_message: str = "Snowflake persistence is disabled"
