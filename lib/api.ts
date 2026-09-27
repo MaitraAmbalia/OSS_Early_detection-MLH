@@ -42,6 +42,34 @@ export type RepositoryAnalysis = {
   };
 };
 
+export type ContributorTrust = {
+  login: string;
+  profile_url: string;
+  contributions: number;
+  observed_events: number;
+  trust_score: number;
+  risk_score: number;
+  risk_level: "critical" | "high" | "medium" | "low";
+  assessment: "signals_detected" | "no_signals_observed";
+  signals: {
+    name: string;
+    risk_score: number;
+    evidence: string;
+    observed_at: string;
+  }[];
+};
+
+export type ContributorTrustPage = {
+  repository: string;
+  items: ContributorTrust[];
+  source: "github_repository_events";
+  algorithm: "snowflake_signal_model_v1_repository_subset";
+  evaluated_signals: string[];
+  window_days: number;
+  computed_at: string;
+  coverage_message: string;
+};
+
 function githubHeaders(token: string): HeadersInit {
   return { "X-GitHub-Token": token };
 }
@@ -74,4 +102,9 @@ export const api = {
       method: "POST",
       headers: githubHeaders(token),
     }),
+  contributorTrust: (repository: string, token: string) =>
+    request<ContributorTrustPage>(
+      `/api/v1/repositories/${repository}/contributors/trust`,
+      { headers: githubHeaders(token) },
+    ),
 };

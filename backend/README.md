@@ -23,6 +23,11 @@ Required fine-grained repository permissions are Metadata read, Contents read, a
 - `POST /api/v1/github/validate`
 - `GET /api/v1/github/repositories`
 - `POST /api/v1/repositories/{owner}/{repo}/analyze`
+- `GET /api/v1/repositories/{owner}/{repo}/contributors/trust`
+
+Contributor scoring uses authenticated GitHub contributor and repository-event data with the
+same behavioral formulas mirrored by `sql/002_detection.sql`. The response labels the algorithm
+and coverage window. It is an on-demand repository assessment, not a global judgment about a user.
 
 The service logs only request method, route, and response status. It does not log headers or bodies.
 

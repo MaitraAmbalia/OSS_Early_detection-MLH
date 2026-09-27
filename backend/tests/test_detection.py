@@ -8,7 +8,7 @@ from app.domain.detection import (
     risk_level,
     suspicious_commit_messages,
 )
-from app.routers.github import github_risk
+from app.routers.github import github_contributor_trust, github_risk
 from app.services.github import GitHubClient
 
 
@@ -118,3 +118,40 @@ def test_manifest_fallback_parses_npm_lock_and_python_dependencies() -> None:
         ("fastapi", None),
         ("httpx", "0.28.1"),
     ]
+
+
+def test_contributor_trust_reuses_behavioral_signal_model() -> None:
+    page = github_contributor_trust(
+        "acme/example",
+        [
+            {"login": "alice", "html_url": "https://github.com/alice", "contributions": 4},
+            {"login": "bob", "html_url": "https://github.com/bob", "contributions": 2},
+        ],
+        [
+            {
+                "id": "member-1",
+                "type": "MemberEvent",
+                "actor": {"login": "maintainer"},
+                "created_at": "2026-09-01T10:00:00Z",
+                "payload": {"action": "added", "member": {"login": "alice"}},
+            },
+            {
+                "id": "push-1",
+                "type": "PushEvent",
+                "actor": {"login": "alice"},
+                "created_at": "2026-09-01T10:10:00Z",
+                "payload": {"commits": [{"message": "read credential from .npmrc"}]},
+            },
+        ],
+    )
+
+    alice = next(item for item in page.items if item.login == "alice")
+    bob = next(item for item in page.items if item.login == "bob")
+    assert alice.risk_score > 90
+    assert alice.trust_score < 10
+    assert {signal.name for signal in alice.signals} == {
+        "new_collaborator_fast_push",
+        "suspicious_commit_message",
+    }
+    assert bob.trust_score == 100
+    assert bob.assessment == "no_signals_observed"

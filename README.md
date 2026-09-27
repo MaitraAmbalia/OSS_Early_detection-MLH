@@ -6,6 +6,11 @@ The active application does not generate mock findings and does not use GH Archi
 
 The current version performs on-demand snapshots when a user selects or rescans a repository. It does not claim to provide continuous background monitoring; that requires a hosted GitHub App, webhooks, scheduled rescans, and persistent storage.
 
+Contributor trust is repository-scoped. A score of `100` means none of the configured behavioral
+risk signals appeared in GitHub's available recent event window; it is not identity verification,
+a global reputation score, or proof that a person is safe. Snowflake is not presented as the live
+source until a deployment configures persistence and event ingestion.
+
 ## Genuine data flow
 
 1. The backend validates the credential with GitHub.
@@ -15,6 +20,10 @@ The current version performs on-demand snapshots when a user selects or rescans 
    Contents API and labels the fallback in the dashboard.
 4. Open Dependabot alerts provide affected packages, severity, vulnerable ranges, and GHSA identifiers.
 5. Sentinel assigns a transparent display score based on the highest open alert severity. It does not claim that this score is a statistical probability.
+6. The contributor view reads GitHub's recent repository events and applies the matching
+   behavioral formulas represented in the Snowflake SQL: fast activity after collaborator access
+   and suspicious commit metadata. Cross-repository burst detection is reserved for a deployment
+   with persisted events from multiple connected repositories.
 
 If Dependency Graph, Dependabot alerts, or the required permission is unavailable, the dashboard shows that limitation. It never substitutes representative vulnerabilities.
 
@@ -106,6 +115,7 @@ For unattended local use, `GITHUB_TOKEN` can instead be set in the ignored `back
 - `POST /api/v1/github/validate`
 - `GET /api/v1/github/repositories`
 - `POST /api/v1/repositories/{owner}/{repo}/analyze`
+- `GET /api/v1/repositories/{owner}/{repo}/contributors/trust`
 
 The GitHub endpoints require `X-GitHub-Token` unless `GITHUB_TOKEN` is configured locally.
 

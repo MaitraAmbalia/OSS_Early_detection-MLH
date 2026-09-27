@@ -79,6 +79,38 @@ class GitHubClient:
                 break
         return repositories
 
+    async def contributors(
+        self, owner: str, repo: str, *, max_pages: int = 10
+    ) -> list[dict[str, Any]]:
+        contributors: list[dict[str, Any]] = []
+        for page in range(1, max_pages + 1):
+            payload, _ = await self._get(
+                f"/repos/{owner}/{repo}/contributors",
+                params={"anon": "false", "per_page": 100, "page": page},
+            )
+            if not isinstance(payload, list):
+                raise GitHubApiError(502, "GitHub returned an invalid contributor list")
+            contributors.extend(item for item in payload if item.get("login"))
+            if len(payload) < 100:
+                break
+        return contributors
+
+    async def repository_events(
+        self, owner: str, repo: str, *, max_pages: int = 3
+    ) -> list[dict[str, Any]]:
+        events: list[dict[str, Any]] = []
+        for page in range(1, max_pages + 1):
+            payload, _ = await self._get(
+                f"/repos/{owner}/{repo}/events",
+                params={"per_page": 100, "page": page},
+            )
+            if not isinstance(payload, list):
+                raise GitHubApiError(502, "GitHub returned invalid repository events")
+            events.extend(payload)
+            if len(payload) < 100:
+                break
+        return events
+
     async def repository(self, owner: str, repo: str) -> dict[str, Any]:
         payload, _ = await self._get(f"/repos/{owner}/{repo}")
         return payload

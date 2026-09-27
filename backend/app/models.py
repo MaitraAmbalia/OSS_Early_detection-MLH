@@ -108,6 +108,41 @@ class GitHubRepositories(BaseModel):
     items: list[GitHubRepositorySummary]
 
 
+class ContributorSignal(BaseModel):
+    name: str
+    risk_score: float = Field(ge=0, le=100)
+    evidence: str
+    observed_at: datetime
+
+
+class ContributorTrust(BaseModel):
+    login: str
+    profile_url: str
+    contributions: int = 0
+    observed_events: int = 0
+    trust_score: float = Field(ge=0, le=100)
+    risk_score: float = Field(ge=0, le=100)
+    risk_level: RiskLevel
+    signals: list[ContributorSignal] = Field(default_factory=list)
+    assessment: Literal["signals_detected", "no_signals_observed"]
+
+
+class ContributorTrustPage(BaseModel):
+    repository: str
+    items: list[ContributorTrust]
+    source: Literal["github_repository_events"] = "github_repository_events"
+    algorithm: str = "snowflake_signal_model_v1_repository_subset"
+    evaluated_signals: list[str] = Field(
+        default_factory=lambda: [
+            "new_collaborator_fast_push",
+            "suspicious_commit_message",
+        ]
+    )
+    window_days: int = 30
+    computed_at: datetime
+    coverage_message: str
+
+
 class SbomPackage(BaseModel):
     name: str
     version: str | None

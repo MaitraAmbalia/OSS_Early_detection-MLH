@@ -44,3 +44,4 @@ def test_github_onboarding_requires_token() -> None:
     assert client.post("/api/v1/github/validate").status_code == 401
     assert client.get("/api/v1/github/repositories").status_code == 401
     assert client.post("/api/v1/repositories/acme/example/analyze").status_code == 401
+    assert client.get("/api/v1/repositories/acme/example/contributors/trust").status_code == 401

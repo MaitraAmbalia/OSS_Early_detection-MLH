@@ -15,11 +15,12 @@ import {
   Search,
   ShieldAlert,
   ShieldCheck,
+  Users,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { api, GitHubRepository, RepositoryAnalysis } from "@/lib/api";
+import { api, ContributorTrustPage, GitHubRepository, RepositoryAnalysis } from "@/lib/api";
 
 const riskStyles = {
   critical: "border-red-400/25 bg-red-400/10 text-red-300",
@@ -34,10 +35,12 @@ export default function Home() {
   const [repositories, setRepositories] = useState<GitHubRepository[]>([]);
   const [selectedRepo, setSelectedRepo] = useState("");
   const [analysis, setAnalysis] = useState<RepositoryAnalysis | null>(null);
+  const [contributorTrust, setContributorTrust] = useState<ContributorTrustPage | null>(null);
   const [query, setQuery] = useState("");
   const [connecting, setConnecting] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState("");
+  const [contributorError, setContributorError] = useState("");
 
   const connected = Boolean(identity);
   const filteredRepositories = useMemo(() => {
@@ -51,9 +54,25 @@ export default function Home() {
     if (!repository || !credential) return;
     setScanning(true);
     setError("");
+    setContributorError("");
     setAnalysis(null);
+    setContributorTrust(null);
     try {
-      setAnalysis(await api.analyze(repository, credential));
+      const [analysisResult, contributorResult] = await Promise.allSettled([
+        api.analyze(repository, credential),
+        api.contributorTrust(repository, credential),
+      ]);
+      if (analysisResult.status === "rejected") throw analysisResult.reason;
+      setAnalysis(analysisResult.value);
+      if (contributorResult.status === "fulfilled") {
+        setContributorTrust(contributorResult.value);
+      } else {
+        setContributorError(
+          contributorResult.reason instanceof Error
+            ? contributorResult.reason.message
+            : "Contributor assessment is unavailable",
+        );
+      }
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Repository scan failed");
     } finally {
@@ -91,8 +110,10 @@ export default function Home() {
     setRepositories([]);
     setSelectedRepo("");
     setAnalysis(null);
+    setContributorTrust(null);
     setQuery("");
     setError("");
+    setContributorError("");
   }
 
   if (!connected) {
@@ -188,7 +209,7 @@ export default function Home() {
           <div className="relative mt-4"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input value={query} onChange={(event) => setQuery(event.target.value)} className="pl-9" placeholder="Filter repositories" /></div>
           <div className="mt-3 max-h-[65vh] space-y-1 overflow-y-auto pr-1">
             {filteredRepositories.map((repository) => (
-              <button key={repository.full_name} type="button" onClick={() => { setSelectedRepo(repository.full_name); setAnalysis(null); setError(""); }} className={`w-full rounded-lg border px-3 py-2.5 text-left transition ${selectedRepo === repository.full_name ? "border-emerald-300/25 bg-emerald-300/[0.08]" : "border-transparent hover:bg-white/[0.04]"}`}>
+              <button key={repository.full_name} type="button" onClick={() => { setSelectedRepo(repository.full_name); setAnalysis(null); setContributorTrust(null); setError(""); setContributorError(""); }} className={`w-full rounded-lg border px-3 py-2.5 text-left transition ${selectedRepo === repository.full_name ? "border-emerald-300/25 bg-emerald-300/[0.08]" : "border-transparent hover:bg-white/[0.04]"}`}>
                 <div className="flex items-center gap-2"><span className="min-w-0 flex-1 truncate text-sm font-medium">{repository.full_name}</span>{repository.private && <LockKeyhole className="h-3.5 w-3.5 text-muted-foreground" />}</div>
                 <p className="mt-1 text-[11px] text-muted-foreground">Updated {new Date(repository.updated_at).toLocaleDateString()}</p>
               </button>
@@ -204,6 +225,7 @@ export default function Home() {
           </div>
 
           {error && <div role="alert" className="rounded-xl border border-red-300/20 bg-red-300/[0.07] px-4 py-3 text-sm text-red-100">{error}</div>}
+          {contributorError && <div role="alert" className="rounded-xl border border-amber-300/20 bg-amber-300/[0.07] px-4 py-3 text-sm text-amber-100">Dependency scanning succeeded, but contributor scoring is unavailable: {contributorError}</div>}
 
           {!analysis && !scanning && <div className="grid min-h-72 place-items-center rounded-xl border border-dashed border-white/10 bg-card/40 p-8 text-center"><div><PackageSearch className="mx-auto h-9 w-9 text-muted-foreground" /><p className="mt-3 font-medium">Ready to inspect GitHub</p><p className="mt-1 text-sm text-muted-foreground">Run a scan to load the current SBOM and open Dependabot alerts.</p></div></div>}
 
@@ -238,6 +260,31 @@ export default function Home() {
                   return <article key={String(label)} className="rounded-xl border border-white/[0.07] bg-card/80 p-4"><div className="flex items-center justify-between text-sm text-muted-foreground"><span>{String(label)}</span><MetricIcon className="h-4 w-4" /></div><p className="mt-3 text-3xl font-semibold">{typeof value === "number" ? value.toLocaleString() : String(value)}</p><p className="mt-1 text-xs text-muted-foreground">{String(note)}</p></article>;
                 })}
               </div>
+
+              {contributorTrust && (
+                <section className="overflow-hidden rounded-xl border border-white/[0.07] bg-card/80">
+                  <div className="flex flex-col gap-3 border-b border-white/[0.07] p-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <div className="flex items-center gap-2"><Users className="h-4 w-4 text-emerald-200" /><h2 className="text-sm font-medium">Contributor trust signals</h2></div>
+                      <p className="mt-1 text-xs text-muted-foreground">Recent GitHub repository events evaluated with the Snowflake signal model</p>
+                    </div>
+                    <Badge variant="outline">{contributorTrust.items.length} contributors</Badge>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[780px] text-left text-sm">
+                      <thead className="border-b border-white/[0.06] text-xs text-muted-foreground"><tr><th className="px-4 py-3 font-medium">Contributor</th><th className="px-4 py-3 font-medium">Contributions</th><th className="px-4 py-3 font-medium">Recent events</th><th className="px-4 py-3 font-medium">Trust signal</th><th className="px-4 py-3 font-medium">Observed evidence</th></tr></thead>
+                      <tbody className="divide-y divide-white/[0.055]">
+                        {contributorTrust.items.map((contributor) => {
+                          const trustClass = contributor.trust_score >= 85 ? "text-emerald-300" : contributor.trust_score >= 65 ? "text-blue-300" : contributor.trust_score >= 40 ? "text-amber-300" : "text-red-300";
+                          return <tr key={contributor.login}><td className="px-4 py-3"><a className="font-medium hover:text-emerald-200" href={contributor.profile_url} target="_blank" rel="noreferrer">@{contributor.login}</a></td><td className="px-4 py-3 text-muted-foreground">{contributor.contributions.toLocaleString()}</td><td className="px-4 py-3 text-muted-foreground">{contributor.observed_events.toLocaleString()}</td><td className={`px-4 py-3 text-lg font-semibold ${trustClass}`}>{Math.round(contributor.trust_score)}<span className="text-xs font-normal text-muted-foreground"> / 100</span></td><td className="max-w-md px-4 py-3 text-xs text-muted-foreground">{contributor.signals.length ? contributor.signals.map((signal) => signal.evidence).join(" ") : "No configured risk signal observed in the available event window."}</td></tr>;
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  {contributorTrust.items.length === 0 && <div className="p-8 text-center text-sm text-muted-foreground">GitHub returned no named contributors for this repository.</div>}
+                  <div className="border-t border-white/[0.06] px-4 py-3 text-xs leading-5 text-muted-foreground"><strong className="font-medium text-foreground/80">Coverage:</strong> {contributorTrust.coverage_message}</div>
+                </section>
+              )}
 
               <section className="overflow-hidden rounded-xl border border-white/[0.07] bg-card/80">
                 <div className="flex items-center justify-between border-b border-white/[0.07] p-4"><div><h2 className="text-sm font-medium">Open vulnerability alerts</h2><p className="mt-1 text-xs text-muted-foreground">Directly from GitHub Dependabot</p></div><Badge variant="outline" className={riskAvailable ? riskStyles[analysis.risk.risk_level] : "border-white/10 text-muted-foreground"}>{riskAvailable ? `${analysis.risk.risk_level} risk` : "risk unavailable"}</Badge></div>
