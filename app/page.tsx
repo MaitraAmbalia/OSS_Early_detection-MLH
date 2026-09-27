@@ -163,6 +163,8 @@ export default function Home() {
   }
 
   const exposures = analysis?.risk.dependency_exposures ?? [];
+  const riskAvailable = analysis?.vulnerability_status === "available";
+  const currentScore = analysis ? Math.round(analysis.risk.composite_score) : null;
   const criticalCount = exposures.filter((item) => item.severity === "critical").length;
   const highCount = exposures.filter((item) => item.severity === "high").length;
 
@@ -173,6 +175,7 @@ export default function Home() {
           <div className="grid h-8 w-8 place-items-center rounded-lg bg-emerald-300/10 text-emerald-200"><ShieldCheck className="h-4 w-4" /></div>
           <div><p className="text-sm font-semibold">Sentinel OSS</p><p className="text-[11px] text-muted-foreground">GitHub dependency monitor</p></div>
           <div className="ml-auto flex items-center gap-2">
+            {analysis && <Badge variant="outline" className={riskAvailable ? riskStyles[analysis.risk.risk_level] : "border-white/10 text-muted-foreground"}>Risk {riskAvailable ? `${currentScore}/100` : "unavailable"}</Badge>}
             <Badge variant="secondary"><CheckCircle2 className="h-3 w-3" />{identity}</Badge>
             <Button size="sm" variant="ghost" onClick={disconnect}><LogOut className="h-4 w-4" />Disconnect</Button>
           </div>
@@ -209,20 +212,35 @@ export default function Home() {
               {analysis.dependency_message && <div className={`flex gap-3 rounded-xl border p-4 text-sm ${analysis.dependency_status === "available" ? "border-blue-300/20 bg-blue-300/[0.07] text-blue-100" : "border-amber-300/20 bg-amber-300/[0.07] text-amber-100"}`}><Boxes className="mt-0.5 h-5 w-5 shrink-0" /><div><p className="font-medium">{analysis.dependency_source === "github_manifests" ? "Using committed manifests" : "Dependency inventory unavailable"}</p><p className="mt-1 opacity-70">{analysis.dependency_message}</p></div></div>}
               {analysis.vulnerability_status === "unavailable" && <div className="flex gap-3 rounded-xl border border-amber-300/20 bg-amber-300/[0.07] p-4 text-sm text-amber-100"><AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" /><div><p className="font-medium">Vulnerability access unavailable</p><p className="mt-1 text-amber-100/70">{analysis.vulnerability_message}</p></div></div>}
 
+              <section className="flex flex-col gap-4 rounded-xl border border-white/[0.07] bg-card/80 p-5 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">Current repository risk score</p>
+                  <div className="mt-2 flex items-baseline gap-2">
+                    <span className="text-5xl font-semibold tracking-tight">{riskAvailable ? currentScore : "—"}</span>
+                    <span className="text-lg text-muted-foreground">/ 100</span>
+                  </div>
+                  <p className="mt-2 text-xs text-muted-foreground">{riskAvailable ? `Calculated from open GitHub Dependabot alerts at ${new Date(analysis.risk.computed_at).toLocaleString()}.` : "Not calculated because GitHub Dependabot alerts could not be read."}</p>
+                </div>
+                <div className="sm:text-right">
+                  <Badge variant="outline" className={riskAvailable ? riskStyles[analysis.risk.risk_level] : "border-white/10 text-muted-foreground"}>{riskAvailable ? `${analysis.risk.risk_level} risk` : "risk unavailable"}</Badge>
+                  <p className="mt-2 max-w-sm text-xs leading-5 text-muted-foreground">This is the latest on-demand scan, not a historical or predictive score.</p>
+                </div>
+              </section>
+
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                 {[
                   ["Dependencies", analysis.dependency_count, Boxes, analysis.dependency_source === "github_sbom" ? "Detected by GitHub SBOM" : analysis.dependency_source === "github_manifests" ? "Read from GitHub manifests" : "Inventory unavailable"],
-                  ["Open alerts", exposures.length, ShieldAlert, analysis.vulnerability_status === "available" ? "GitHub Dependabot" : "Permission required"],
-                  ["Critical", criticalCount, AlertTriangle, "Immediate attention"],
-                  ["High", highCount, ShieldCheck, `Risk ${Math.round(analysis.risk.composite_score)}/100`],
+                  ["Open alerts", riskAvailable ? exposures.length : "—", ShieldAlert, riskAvailable ? "GitHub Dependabot" : "Permission required"],
+                  ["Critical", riskAvailable ? criticalCount : "—", AlertTriangle, riskAvailable ? "Immediate attention" : "Status unknown"],
+                  ["High", riskAvailable ? highCount : "—", ShieldCheck, riskAvailable ? "Open high-severity alerts" : "Status unknown"],
                 ].map(([label, value, Icon, note]) => {
                   const MetricIcon = Icon as typeof Boxes;
-                  return <article key={String(label)} className="rounded-xl border border-white/[0.07] bg-card/80 p-4"><div className="flex items-center justify-between text-sm text-muted-foreground"><span>{String(label)}</span><MetricIcon className="h-4 w-4" /></div><p className="mt-3 text-3xl font-semibold">{Number(value).toLocaleString()}</p><p className="mt-1 text-xs text-muted-foreground">{String(note)}</p></article>;
+                  return <article key={String(label)} className="rounded-xl border border-white/[0.07] bg-card/80 p-4"><div className="flex items-center justify-between text-sm text-muted-foreground"><span>{String(label)}</span><MetricIcon className="h-4 w-4" /></div><p className="mt-3 text-3xl font-semibold">{typeof value === "number" ? value.toLocaleString() : String(value)}</p><p className="mt-1 text-xs text-muted-foreground">{String(note)}</p></article>;
                 })}
               </div>
 
               <section className="overflow-hidden rounded-xl border border-white/[0.07] bg-card/80">
-                <div className="flex items-center justify-between border-b border-white/[0.07] p-4"><div><h2 className="text-sm font-medium">Open vulnerability alerts</h2><p className="mt-1 text-xs text-muted-foreground">Directly from GitHub Dependabot</p></div><Badge variant="outline" className={riskStyles[analysis.risk.risk_level]}>{analysis.risk.risk_level} risk</Badge></div>
+                <div className="flex items-center justify-between border-b border-white/[0.07] p-4"><div><h2 className="text-sm font-medium">Open vulnerability alerts</h2><p className="mt-1 text-xs text-muted-foreground">Directly from GitHub Dependabot</p></div><Badge variant="outline" className={riskAvailable ? riskStyles[analysis.risk.risk_level] : "border-white/10 text-muted-foreground"}>{riskAvailable ? `${analysis.risk.risk_level} risk` : "risk unavailable"}</Badge></div>
                 {exposures.length ? <div className="overflow-x-auto"><table className="w-full min-w-[720px] text-left text-sm"><thead className="border-b border-white/[0.06] text-xs text-muted-foreground"><tr><th className="px-4 py-3 font-medium">Package</th><th className="px-4 py-3 font-medium">Ecosystem</th><th className="px-4 py-3 font-medium">Severity</th><th className="px-4 py-3 font-medium">Affected range</th><th className="px-4 py-3 font-medium">Advisory</th></tr></thead><tbody className="divide-y divide-white/[0.055]">{exposures.map((item) => <tr key={`${item.advisory_id}-${item.package_name}`}><td className="px-4 py-3 font-medium">{item.package_name}</td><td className="px-4 py-3 text-muted-foreground">{item.ecosystem}</td><td className="px-4 py-3"><Badge variant="outline" className={riskStyles[item.severity as keyof typeof riskStyles] ?? riskStyles.low}>{item.severity}</Badge></td><td className="px-4 py-3 font-mono text-xs text-muted-foreground">{item.match_reason}</td><td className="px-4 py-3 font-mono text-xs">{item.advisory_id}</td></tr>)}</tbody></table></div> : analysis.vulnerability_status === "available" ? <div className="p-8 text-center"><CheckCircle2 className="mx-auto h-8 w-8 text-emerald-300" /><p className="mt-3 text-sm font-medium">No open Dependabot alerts</p><p className="mt-1 text-xs text-muted-foreground">GitHub returned no open vulnerability alerts for this repository.</p></div> : <div className="p-8 text-center"><AlertTriangle className="mx-auto h-8 w-8 text-amber-300" /><p className="mt-3 text-sm font-medium">Alert status unknown</p><p className="mt-1 text-xs text-muted-foreground">Sentinel could not read Dependabot alerts, so this repository is not being reported as clean.</p></div>}
               </section>
 

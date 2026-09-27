@@ -30,6 +30,7 @@ export type RepositoryAnalysis = {
   risk: {
     composite_score: number;
     risk_level: "critical" | "high" | "medium" | "low";
+    computed_at: string;
     dependency_exposures: {
       ecosystem: string;
       package_name: string;
